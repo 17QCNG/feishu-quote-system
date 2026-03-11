@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>报价系统</title>
+  <script src="https://lf3-cdn.bytegoc.com/obj/lark-base-open/js-sdk/1.0.0/index.js"></script>
+</head>
+<body>
+  <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: Arial;">
+    <h2>📋 报价系统</h2>
+    
+    <div style="margin-bottom: 20px;">
+      <h3>步骤1：选择产品库表</h3>
+      <select id="tableSelect" style="width: 100%; padding: 8px;">
+        <option value="">请选择产品库表...</option>
+      </select>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <h3>步骤2：选择产品</h3>
+      <div id="productList" style="border: 1px solid #ddd; padding: 15px; min-height: 200px;">
+        <p style="color: #999; text-align: center;">请先选择产品库表</p>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <h3>步骤3：客户信息</h3>
+      <input type="text" id="customerName" placeholder="请输入客户名称" style="width: 100%; padding: 8px;">
+    </div>
+
+    <button id="generateQuote" style="width: 100%; padding: 12px; background: #3370ff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+      🎯 生成报价单
+    </button>
+
+    <div id="message" style="display: none; padding: 12px; border-radius: 4px; margin-top: 15px;"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
