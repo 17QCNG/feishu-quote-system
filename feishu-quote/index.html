@@ -2,39 +2,168 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>报价系统</title>
   <script src="https://lf3-cdn.bytegoc.com/obj/lark-base-open/js-sdk/1.0.0/index.js"></script>
 </head>
 <body>
-  <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: Arial;">
+  <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
     <h2>📋 报价系统</h2>
     
     <div style="margin-bottom: 20px;">
-      <h3>步骤1：选择产品库表</h3>
-      <select id="tableSelect" style="width: 100%; padding: 8px;">
+      <h3 style="font-size: 16px; color: #646a73;">步骤1：选择产品库表</h3>
+      <select id="tableSelect" style="width: 100%; padding: 10px; border: 1px solid #dee0e3; border-radius: 4px;">
         <option value="">请选择产品库表...</option>
       </select>
     </div>
 
     <div style="margin-bottom: 20px;">
-      <h3>步骤2：选择产品</h3>
-      <div id="productList" style="border: 1px solid #ddd; padding: 15px; min-height: 200px;">
-        <p style="color: #999; text-align: center;">请先选择产品库表</p>
+      <h3 style="font-size: 16px; color: #646a73;">步骤2：选择产品</h3>
+      <div id="productList" style="border: 1px solid #dee0e3; padding: 15px; min-height: 200px; border-radius: 4px; max-height: 300px; overflow-y: auto;">
+        <p style="color: #86909c; text-align: center;">请先选择产品库表</p>
       </div>
     </div>
 
     <div style="margin-bottom: 20px;">
-      <h3>步骤3：客户信息</h3>
-      <input type="text" id="customerName" placeholder="请输入客户名称" style="width: 100%; padding: 8px;">
+      <h3 style="font-size: 16px; color: #646a73;">步骤3：客户信息</h3>
+      <input type="text" id="customerName" placeholder="请输入客户名称" style="width: 100%; padding: 10px; border: 1px solid #dee0e3; border-radius: 4px; box-sizing: border-box;">
     </div>
 
-    <button id="generateQuote" style="width: 100%; padding: 12px; background: #3370ff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+    <button id="generateQuote" style="width: 100%; padding: 12px; background: #3370ff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer;">
       🎯 生成报价单
     </button>
 
     <div id="message" style="display: none; padding: 12px; border-radius: 4px; margin-top: 15px;"></div>
   </div>
 
-  <script src="app.js"></script>
+  <script>
+    const { bitable } = window;
+    let selectedProducts = [];
+    let productTable = null;
+
+    async function init() {
+      try {
+        const tables = await bitable.base.getTableList();
+        const tableSelect = document.getElementById('tableSelect');
+        
+        tables.forEach(table => {
+          const option = document.createElement('option');
+          option.value = table.id;
+          option.textContent = table.name;
+          tableSelect.appendChild(option);
+        });
+        
+        tableSelect.addEventListener('change', async (e) => {
+          const tableId = e.target.value;
+          if (!tableId) return;
+          
+          productTable = await bitable.base.getTable(tableId);
+          await loadProducts();
+        });
+        
+        document.getElementById('generateQuote').addEventListener('click', generateQuote);
+        
+      } catch (error) {
+        alert('初始化失败: ' + error);
+      }
+    }
+
+    async function loadProducts() {
+      const list = document.getElementById('productList');
+      list.innerHTML = '<p style="color: #999;">加载中...</p>';
+      
+      try {
+        const records = await productTable.getRecords({ pageSize: 100 });
+        
+        if (records.length === 0) {
+          list.innerHTML = '<p style="color: #999;">暂无数据</p>';
+          return;
+        }
+        
+        list.innerHTML = '';
+        records.forEach(record => {
+          const div = document.createElement('div');
+          div.style.cssText = 'padding: 12px; margin-bottom: 8px; background: #f7f8fa; border-radius: 4px; cursor: pointer;';
+          div.innerHTML = '<strong>' + (record.fields['产品名称'] || '未命名') + '</strong><br><small>编码: ' + (record.fields['产品编码'] || 'N/A') + ' | 单价: ¥' + (record.fields['单价'] || 0) + '</small>';
+          
+          div.onclick = () => {
+            const isSelected = div.style.background === 'rgb(212, 232, 255)';
+            div.style.background = isSelected ? '#f7f8fa' : '#d4e8ff';
+            div.style.border = isSelected ? 'none' : '2px solid #3370ff';
+            
+            const idx = selectedProducts.findIndex(p => p.id === record.id);
+            if (idx > -1) {
+              selectedProducts.splice(idx, 1);
+            } else {
+              selectedProducts.push(record);
+            }
+          };
+          
+          list.appendChild(div);
+        });
+      } catch (error) {
+        list.innerHTML = '<p style="color: red;">加载失败</p>';
+      }
+    }
+
+    async function generateQuote() {
+      const customerName = document.getElementById('customerName').value;
+      
+      if (!customerName) {
+        showMessage('请输入客户名称', 'error');
+        return;
+      }
+      
+      if (selectedProducts.length === 0) {
+        showMessage('请至少选择一个产品', 'error');
+        return;
+      }
+      
+      try {
+        const quoteTable = await bitable.base.getTableByName('报价单');
+        
+        for (const product of selectedProducts) {
+          await quoteTable.addRecord({
+            fields: {
+              '客户名称': customerName,
+              '产品名称': product.fields['产品名称'],
+              '数量': 1,
+              '单价': product.fields['单价'] || 0
+            }
+          });
+        }
+        
+        showMessage('✅ 成功！共 ' + selectedProducts.length + ' 个产品', 'success');
+        
+        selectedProducts = [];
+        document.querySelectorAll('#productList > div').forEach(div => {
+          div.style.background = '#f7f8fa';
+          div.style.border = 'none';
+        });
+        document.getElementById('customerName').value = '';
+        
+      } catch (error) {
+        showMessage('失败: ' + error, 'error');
+      }
+    }
+
+    function showMessage(text, type) {
+      const div = document.getElementById('message');
+      div.textContent = text;
+      div.style.display = 'block';
+      div.style.background = type === 'success' ? '#e8f8f2' : '#ffece8';
+      div.style.color = type === 'success' ? '#00b42a' : '#f53f3f';
+      
+      setTimeout(() => {
+        div.style.display = 'none';
+      }, 3000);
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
 </body>
 </html>
