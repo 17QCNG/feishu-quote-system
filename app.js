@@ -242,9 +242,11 @@
       properties: { defaultRowHeight: 20 },
     });
 
+    // 固定列：产品类型后增加“产品名称”
     var headers = [
       "产品编号",
       "产品类型",
+      "产品名称",
       "尺寸/天数",
       "数量",
       "单位",
@@ -255,13 +257,14 @@
       "产品描述",
     ];
 
-    // 需求2：B=24, C=24, J=35，其它=9
-    var colWidths = [9, 24, 24, 9, 9, 9, 9, 9, 9, 35];
+    // 列宽：类型/名称/尺寸天数更宽，描述更宽，其它适中
+    // A=9, B=24, C=24, D=24, K=35，其它=9
+    var colWidths = [9, 24, 24, 24, 9, 9, 9, 9, 9, 9, 35];
     for (var c = 1; c <= colWidths.length; c++) {
       ws.getColumn(c).width = colWidths[c - 1];
     }
 
-    // 需求5：表头上方加一行标题（合并 A1:J1）
+    // 标题行（合并 A1:K1）
     ws.addRow([fileTitle]);
     ws.mergeCells(1, 1, 1, headers.length);
 
@@ -282,28 +285,102 @@
     headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     headerRow.height = 20;
 
+    // 导出排序：按产品类型分组并按指定顺序输出；未知类型归并为“其他”
+    var typeOrder = [
+      "场现场搭建",
+      "印刷制作",
+      "线上",
+      "系统设计",
+      "系统适配",
+      "人员执行",
+      "硬件设备",
+      "摄影摄像",
+      "视觉设计",
+      "项目管理",
+      "其他",
+    ];
+    var typeOrderMap = {};
+    for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
+
+    function canonicalType(rawType) {
+      var t = normalizeName(rawType);
+      if (Object.prototype.hasOwnProperty.call(typeOrderMap, t)) return t;
+      return "其他";
+    }
+
+    var selectedArr = [];
+    if (selected && typeof selected.forEach === "function") {
+      selected.forEach(function (v) {
+        selectedArr.push(v);
+      });
+    } else if (Array.isArray(selected)) {
+      selectedArr = selected.slice();
+    }
+
+    selectedArr.sort(function (a, b) {
+      var at = canonicalType(a && a.sourceTableName ? a.sourceTableName : "");
+      var bt = canonicalType(b && b.sourceTableName ? b.sourceTableName : "");
+
+      var ai = Object.prototype.hasOwnProperty.call(typeOrderMap, at) ? typeOrderMap[at] : typeOrder.length;
+      var bi = Object.prototype.hasOwnProperty.call(typeOrderMap, bt) ? typeOrderMap[bt] : typeOrderMap["其他"];
+      if (ai !== bi) return ai - bi;
+
+      // 同类型下：产品名称、编号排序，保证输出稳定且“列在一起”
+      var an = normalizeName(a && a.name ? a.name : "");
+      var bn = normalizeName(b && b.name ? b.name : "");
+      if (an !== bn) return an.localeCompare(bn, "zh");
+
+      var ac = normalizeName(a && a.code ? a.code : "");
+      var bc = normalizeName(b && b.code ? b.code : "");
+      return ac.localeCompare(bc, "zh");
+    });
+
     // 数据行从第3行开始
     var rowNum = 3;
-    selected.forEach(function (it) {
+    for (var si = 0; si < selectedArr.length; si++) {
+      var it = selectedArr[si];
       var desc = normalizeNewlines(it.desc || "");
 
       var row = ws.getRow(rowNum);
-      row.getCell(1).value = it.code || "";
-      row.getCell(2).value = it.sourceTableName || "";
-      row.getCell(3).value = it.sizeDays || "";
-      row.getCell(4).value = Math.max(1, Number(it.qty) || 1);
-      row.getCell(5).value = it.unit || "";
-      row.getCell(6).value = Number(it.cost || 0);
-      row.getCell(7).value = { formula: "F" + rowNum + "*D" + rowNum };
-      row.getCell(8).value = Number(it.price || 0);
-      row.getCell(9).value = { formula: "H" + rowNum + "*D" + rowNum };
-      row.getCell(10).value = desc;
 
-      // 需求2：自动换行 + 行高按本行最大内容行数设置
+      // A: 产品编号
+      row.getCell(1).value = it.code || "";
+
+      // B: 产品类型（未知类型归并为“其他”）
+      row.getCell(2).value = canonicalType(it.sourceTableName || "");
+
+      // C: 产品名称
+      row.getCell(3).value = it.name || "";
+
+      // D: 尺寸/天数
+      row.getCell(4).value = it.sizeDays || "";
+
+      // E: 数量
+      row.getCell(5).value = Math.max(1, Number(it.qty) || 1);
+
+      // F: 单位
+      row.getCell(6).value = it.unit || "";
+
+      // G: 成本单价
+      row.getCell(7).value = Number(it.cost || 0);
+
+      // H: 成本总价 = G * E
+      row.getCell(8).value = { formula: "G" + rowNum + "*E" + rowNum };
+
+      // I: 单价
+      row.getCell(9).value = Number(it.price || 0);
+
+      // J: 总价 = I * E
+      row.getCell(10).value = { formula: "I" + rowNum + "*E" + rowNum };
+
+      // K: 产品描述
+      row.getCell(11).value = desc;
+
+      // 自动换行 + 行高按本行最大内容行数设置；同时设置居中（水平/垂直）
       var maxLines = 1;
       for (var ci = 1; ci <= headers.length; ci++) {
         var cell = ws.getCell(rowNum, ci);
-        cell.alignment = { vertical: "middle", wrapText: true };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
 
         var v = cell.value;
         if (v && typeof v === "object" && v.formula) continue; // 公式列按1行估算
@@ -316,7 +393,28 @@
 
       row.height = rowHeightByLines(Math.min(3, maxLines));
       rowNum++;
-    });
+    }
+
+    // 所有单元格：细线框 + 居中（标题/表头/数据区全覆盖）
+    var lastRow = rowNum - 1;
+    var borderThin = {
+      top: { style: "thin" },
+      left: { style: "thin" },
+      bottom: { style: "thin" },
+      right: { style: "thin" },
+    };
+
+    for (var r = 1; r <= lastRow; r++) {
+      for (var cc = 1; cc <= headers.length; cc++) {
+        var ccell = ws.getCell(r, cc);
+        ccell.border = borderThin;
+        ccell.alignment = Object.assign({}, ccell.alignment || {}, {
+          vertical: "middle",
+          horizontal: "center",
+          wrapText: true,
+        });
+      }
+    }
 
     var buf = await wb.xlsx.writeBuffer();
     var blob = new Blob([buf], {
