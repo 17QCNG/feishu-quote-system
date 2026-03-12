@@ -49,43 +49,80 @@
     return [{ type: "text", text: text || "" }];
   }
 
- function getBitableMaybe() {
-  return window.bitable || (window.lark && window.lark.bitable) || null;
-}
+  function getBitableMaybe() {
+    return window.bitable || (window.lark && window.lark.bitable) || null;
+  }
 
-function waitForBitable(maxMs) {
-  return new Promise(function (resolve, reject) {
-    var start = Date.now();
-    var timer = setInterval(function () {
-      var bt = getBitableMaybe();
-      if (bt && bt.base) {
-        clearInterval(timer);
-        resolve(bt);
-        return;
-      }
-      if (Date.now() - start > maxMs) {
-        clearInterval(timer);
-        reject(
-          new Error(
-            "飞书 SDK 未加载或不可用。window.bitable=" +
-              (window.bitable ? "yes" : "no") +
-              ", window.lark.bitable=" +
-              (window.lark && window.lark.bitable ? "yes" : "no")
-          )
-        );
-      }
-    }, 80);
-  });
-}
+  function waitForBitable(maxMs) {
+    return new Promise(function (resolve, reject) {
+      var start = Date.now();
+      var timer = setInterval(function () {
+        var bt = getBitableMaybe();
+        if (bt && bt.base) {
+          clearInterval(timer);
+          resolve(bt);
+          return;
+        }
+        if (Date.now() - start > maxMs) {
+          clearInterval(timer);
+          reject(
+            new Error(
+              "飞书 SDK 未加载或不可用。window.bitable=" +
+                (window.bitable ? "yes" : "no") +
+                ", window.lark.bitable=" +
+                (window.lark && window.lark.bitable ? "yes" : "no")
+            )
+          );
+        }
+      }, 80);
+    });
+  }
+
+  function normalizeName(s) {
+    return String(s || "").trim();
+  }
+
+  async function getFieldByAnyName(table, candidates, required) {
+    var tried = [];
+    for (var i = 0; i < candidates.length; i++) {
+      var n = normalizeName(candidates[i]);
+      if (!n) continue;
+      tried.push(n);
+      try {
+        var f = await table.getFieldByName(n);
+        if (f) return { field: f, picked: n };
+      } catch (e) {}
+    }
+    if (required) {
+      throw new Error("字段不存在：" + tried.join("/") + "（请检查字段名是否一致）");
+    }
+    return { field: null, picked: "" };
+  }
+
+  // Base JS SDK: getRecords() 返回 { records, hasMore, pageToken, total }
+  async function getAllRecords(table, pageSize) {
+    var all = [];
+    var token = undefined;
+    var ps = Math.min(Math.max(Number(pageSize) || 200, 1), 500);
+
+    for (;;) {
+      var res = await table.getRecords({ pageSize: ps, pageToken: token });
+      var batch = res && res.records ? res.records : [];
+      all = all.concat(batch);
+
+      if (!res || !res.hasMore) break;
+      token = res.pageToken;
+      if (!token) break;
+    }
+    return all;
+  }
 
   async function getAllTables(bitable) {
-    // 优先：getTableMetaList -> [{id,name}]
     if (bitable.base && typeof bitable.base.getTableMetaList === "function") {
       var metaList = await bitable.base.getTableMetaList();
       return metaList || [];
     }
 
-    // 兜底：getTableList + getName
     var list = await bitable.base.getTableList();
     var metas = [];
     for (var i = 0; i < list.length; i++) {
@@ -112,20 +149,19 @@ function waitForBitable(maxMs) {
 
     var bitable;
     try {
-      // 关键：必须在飞书多维表格里作为插件打开。浏览器直接打开 Pages 会失败（这是正常的）
       bitable = await waitForBitable(5000);
     } catch (e) {
       setMsg(
-        "飞书 SDK 未加载：请在【飞书多维表格】里通过【扩展/自定义插件】打开本页面，不要直接在浏览器访问。",
+        "飞书 SDK 未加载：请在【飞书多维表格】里通过【扩展/自定义插件】打开本页面；如果你用 GitHub Pages 直接访问会失败（这是正常的）。",
         "err"
       );
       return;
     }
 
-    // 选中产品：recordId -> {name, code, price, qty}
+    // recordId -> item
     var selected = new Map();
 
-    // 加载表列表
+    // 表列表
     var metas = [];
     try {
       metas = await getAllTables(bitable);
@@ -157,48 +193,16 @@ function waitForBitable(maxMs) {
       try {
         var table = await bitable.base.getTableById(tableId);
 
-        // 按字段名找字段
-        function normalizeName(s) {
-  return String(s || "").trim();
-}
+        // 识别你要求的 7 个字段（按你给的中文名；另带少量兼容）
+        var fCode = (await getFieldByAnyName(table, ["产品编号", "产品编码", "编号", "编码"], true)).field;
+        var fName = (await getFieldByAnyName(table, ["产品名称", "名称"], true)).field;
+        var fType = (await getFieldByAnyName(table, ["产品类型", "类型"], false)).field;
+        var fUnit = (await getFieldByAnyName(table, ["计算单位", "单位"], false)).field;
+        var fCost = (await getFieldByAnyName(table, ["成本单价", "成本", "成本价"], false)).field;
+        var fPrice = (await getFieldByAnyName(table, ["单价", "售价", "报价"], true)).field;
+        var fDesc = (await getFieldByAnyName(table, ["产品描述", "描述", "备注"], false)).field;
 
-async function getFieldByAnyName(table, candidates, required) {
-  var tried = [];
-  for (var i = 0; i < candidates.length; i++) {
-    var n = normalizeName(candidates[i]);
-    if (!n) continue;
-    tried.push(n);
-    try {
-      var f = await table.getFieldByName(n);
-      if (f) return { field: f, picked: n, tried: tried };
-    } catch (e) {
-      // ignore and try next
-    }
-  }
-  if (required) {
-    throw new Error("字段不存在：" + tried.join("/") + "（请检查字段名是否一致）");
-  }
-  return { field: null, picked: "", tried: tried };
-}
-
-        // 你要识别的 7 个字段（带兼容别名）
-        var codeRes = await getFieldByAnyName(table, ["产品编号", "产品编码", "编号", "编码"], true);
-        var nameRes = await getFieldByAnyName(table, ["产品名称", "名称"], true);
-        var typeRes = await getFieldByAnyName(table, ["产品类型", "类型"], false);
-        var unitRes = await getFieldByAnyName(table, ["计算单位", "单位"], false);
-        var costRes = await getFieldByAnyName(table, ["成本单价", "成本", "成本价"], false);
-        var priceRes = await getFieldByAnyName(table, ["单价", "售价", "报价"], true);
-        var descRes = await getFieldByAnyName(table, ["产品描述", "描述", "备注"], false);
-        
-        var codeField = codeRes.field;
-        var nameField = nameRes.field;
-        var typeField = typeRes.field;
-        var unitField = unitRes.field;
-        var costField = costRes.field;
-        var priceField = priceRes.field;
-        var descField = descRes.field;
-
-        var records = await table.getRecords({ pageSize: 200 });
+        var records = await getAllRecords(table, 200);
 
         if (!records || records.length === 0) {
           productList.innerHTML = '<div class="hint">该表没有记录，请先添加产品数据。</div>';
@@ -212,21 +216,16 @@ async function getFieldByAnyName(table, candidates, required) {
           var recordId = r.recordId || r.id;
           var fields = r.fields || {};
 
-          var rawCode = fields[codeField.id];
-          var rawName = fields[nameField.id];
-          var rawType = typeField ? fields[typeField.id] : null;
-          var rawUnit = unitField ? fields[unitField.id] : null;
-          var rawCost = costField ? fields[costField.id] : null;
-          var rawPrice = fields[priceField.id];
-          var rawDesc = descField ? fields[descField.id] : null;
-
-          var pcode = toPlainText(rawCode) || "";
-          var pname = toPlainText(rawName) || "未命名产品";
-          var ptype = toPlainText(rawType) || "";
-          var punit = toPlainText(rawUnit) || "";
-          var cost = toNumber(rawCost);
-          var price = toNumber(rawPrice);
-          var pdesc = toPlainText(rawDesc) || "";
+          var item = {
+            code: toPlainText(fields[fCode.id]) || "",
+            name: toPlainText(fields[fName.id]) || "未命名产品",
+            type: fType ? (toPlainText(fields[fType.id]) || "") : "",
+            unit: fUnit ? (toPlainText(fields[fUnit.id]) || "") : "",
+            cost: fCost ? toNumber(fields[fCost.id]) : 0,
+            price: toNumber(fields[fPrice.id]),
+            desc: fDesc ? (toPlainText(fields[fDesc.id]) || "") : "",
+            qty: 1,
+          };
 
           var row = document.createElement("div");
           row.className = "row";
@@ -236,15 +235,15 @@ async function getFieldByAnyName(table, candidates, required) {
 
           var mid = document.createElement("div");
           mid.innerHTML =
-            '<div class="pname">' + pname + "</div>" +
+            '<div class="pname">' + item.name + "</div>" +
             '<div class="pmeta">' +
-              "编号：" + (pcode || "—") +
-              (ptype ? "　类型：" + ptype : "") +
-              (punit ? "　单位：" + punit : "") +
-              "　单价：¥" + price +
-              (costRes.field ? "　成本：¥" + cost : "") +
+              "编号：" + (item.code || "—") +
+              (item.type ? "　类型：" + item.type : "") +
+              (item.unit ? "　单位：" + item.unit : "") +
+              "　单价：¥" + item.price +
+              (fCost ? "　成本：¥" + item.cost : "") +
             "</div>" +
-            (pdesc ? '<div class="pmeta">描述：' + pdesc + "</div>" : "");
+            (item.desc ? '<div class="pmeta">描述：' + item.desc + "</div>" : "");
 
           var qty = document.createElement("input");
           qty.className = "qty";
@@ -254,26 +253,19 @@ async function getFieldByAnyName(table, candidates, required) {
           qty.value = "1";
           qty.disabled = true;
 
-          cb.addEventListener("change", (function (rid, name, code, p, qtyEl) {
+          cb.addEventListener("change", (function (rid, it, qtyEl) {
             return function () {
               if (this.checked) {
                 qtyEl.disabled = false;
-                selected.set(rid, {
-                  code: pcode,
-                  name: pname,
-                  type: ptype,
-                  unit: punit,
-                  cost: cost,
-                  price: price,
-                  desc: pdesc,
-                  qty: Math.max(1, Number(qtyEl.value) || 1),
-                });
+                var next = Object.assign({}, it);
+                next.qty = Math.max(1, Number(qtyEl.value) || 1);
+                selected.set(rid, next);
               } else {
                 qtyEl.disabled = true;
                 selected.delete(rid);
               }
             };
-          })(recordId, pname, pcode, price, qty));
+          })(recordId, item, qty));
 
           qty.addEventListener("input", (function (rid, qtyEl) {
             return function () {
@@ -290,13 +282,8 @@ async function getFieldByAnyName(table, candidates, required) {
           productList.appendChild(row);
         }
       } catch (e3) {
-        setMsg(
-          "加载产品失败：" +
-            (e3 && e3.message ? e3.message : String(e3)) +
-            "。请确认产品表存在字段：产品名称/产品编码/单价",
-          "err"
-        );
-        productList.innerHTML = '<div class="hint">加载失败，请检查字段名是否一致。</div>';
+        setMsg("加载产品失败：" + (e3 && e3.message ? e3.message : String(e3)), "err");
+        productList.innerHTML = '<div class="hint">加载失败，请检查字段名与表内是否一致。</div>';
       }
     });
 
@@ -316,52 +303,40 @@ async function getFieldByAnyName(table, candidates, required) {
       try {
         var quoteTable = await bitable.base.getTableByName("报价单");
 
+        // 最基本必需字段（建议你的“报价单”表至少有这些）
         var customerField = await quoteTable.getFieldByName("客户名称");
         var qtyField = await quoteTable.getFieldByName("数量");
-        
-        // 报价单表的字段：建议和产品表同名；这里做兼容：有就写，没有就跳过
-        var qCode = (await getFieldByAnyName(quoteTable, ["产品编号", "产品编码"], false)).field;
-        var qName = (await getFieldByAnyName(quoteTable, ["产品名称", "名称"], true)).field;
-        var qType = (await getFieldByAnyName(quoteTable, ["产品类型", "类型"], false)).field;
-        var qUnit = (await getFieldByAnyName(quoteTable, ["计算单位", "单位"], false)).field;
-        var qCost = (await getFieldByAnyName(quoteTable, ["成本单价", "成本", "成本价"], false)).field;
-        var qPrice = (await getFieldByAnyName(quoteTable, ["单价", "售价", "报价"], true)).field;
-        var qDesc = (await getFieldByAnyName(quoteTable, ["产品描述", "描述", "备注"], false)).field;
+        var nameField = (await getFieldByAnyName(quoteTable, ["产品名称", "名称"], true)).field;
+        var priceField = (await getFieldByAnyName(quoteTable, ["单价", "售价", "报价"], true)).field;
+
+        // 可选：如果“报价单”表也有这些列，就自动写入（建议做成 文本/数字 字段）
+        var codeField = (await getFieldByAnyName(quoteTable, ["产品编号", "产品编码"], false)).field;
+        var costField = (await getFieldByAnyName(quoteTable, ["成本单价", "成本", "成本价"], false)).field;
+        var descField = (await getFieldByAnyName(quoteTable, ["产品描述", "描述", "备注"], false)).field;
 
         var count = 0;
-        selected.forEach(async function () {});
-
-        // 逐条写入
         for (const it of selected.values()) {
           var fs = {};
           fs[customerField.id] = asRichText(cname);
           fs[qtyField.id] = it.qty;
-        
-          if (qCode) fs[qCode.id] = asRichText(it.code);
-          if (qName) fs[qName.id] = asRichText(it.name);
-          if (qType) fs[qType.id] = asRichText(it.type);
-          if (qUnit) fs[qUnit.id] = asRichText(it.unit);
-          if (qCost) fs[qCost.id] = it.cost;
-          if (qPrice) fs[qPrice.id] = it.price;
-          if (qDesc) fs[qDesc.id] = asRichText(it.desc);
-        
+          fs[nameField.id] = asRichText(it.name);
+          fs[priceField.id] = it.price;
+
+          if (codeField) fs[codeField.id] = asRichText(it.code);
+          if (costField) fs[costField.id] = it.cost;
+          if (descField) fs[descField.id] = asRichText(it.desc);
+
           await quoteTable.addRecord({ fields: fs });
           count++;
         }
 
         setMsg("已生成报价单：写入 " + count + " 条明细到“报价单”表。", "ok");
 
-        // 清空
         selected.clear();
         customerName.value = "";
         tableSelect.dispatchEvent(new Event("change"));
       } catch (e4) {
-        setMsg(
-          "写入报价单失败：" +
-            (e4 && e4.message ? e4.message : String(e4)) +
-            "。请确认“报价单”表存在字段：客户名称/产品名称/数量/单价",
-          "err"
-        );
+        setMsg("写入报价单失败：" + (e4 && e4.message ? e4.message : String(e4)), "err");
       }
     });
 
@@ -380,4 +355,3 @@ async function getFieldByAnyName(table, candidates, required) {
     });
   }
 })();
-
