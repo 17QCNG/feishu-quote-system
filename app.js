@@ -49,22 +49,34 @@
     return [{ type: "text", text: text || "" }];
   }
 
-  function waitForBitable(maxMs) {
-    return new Promise(function (resolve, reject) {
-      var start = Date.now();
-      var timer = setInterval(function () {
-        if (window.bitable && window.bitable.base) {
-          clearInterval(timer);
-          resolve(window.bitable);
-          return;
-        }
-        if (Date.now() - start > maxMs) {
-          clearInterval(timer);
-          reject(new Error("飞书 SDK 未加载"));
-        }
-      }, 80);
-    });
-  }
+ function getBitableMaybe() {
+  return window.bitable || (window.lark && window.lark.bitable) || null;
+}
+
+function waitForBitable(maxMs) {
+  return new Promise(function (resolve, reject) {
+    var start = Date.now();
+    var timer = setInterval(function () {
+      var bt = getBitableMaybe();
+      if (bt && bt.base) {
+        clearInterval(timer);
+        resolve(bt);
+        return;
+      }
+      if (Date.now() - start > maxMs) {
+        clearInterval(timer);
+        reject(
+          new Error(
+            "飞书 SDK 未加载或不可用。window.bitable=" +
+              (window.bitable ? "yes" : "no") +
+              ", window.lark.bitable=" +
+              (window.lark && window.lark.bitable ? "yes" : "no")
+          )
+        );
+      }
+    }, 80);
+  });
+}
 
   async function getAllTables(bitable) {
     // 优先：getTableMetaList -> [{id,name}]
