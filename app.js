@@ -157,10 +157,46 @@ function waitForBitable(maxMs) {
       try {
         var table = await bitable.base.getTableById(tableId);
 
-        // 按字段名找字段（字段名必须一字不差）
-        var nameField = await table.getFieldByName("产品名称");
-        var codeField = await table.getFieldByName("产品编码");
-        var priceField = await table.getFieldByName("单价");
+        // 按字段名找字段
+        function normalizeName(s) {
+  return String(s || "").trim();
+}
+
+async function getFieldByAnyName(table, candidates, required) {
+  var tried = [];
+  for (var i = 0; i < candidates.length; i++) {
+    var n = normalizeName(candidates[i]);
+    if (!n) continue;
+    tried.push(n);
+    try {
+      var f = await table.getFieldByName(n);
+      if (f) return { field: f, picked: n, tried: tried };
+    } catch (e) {
+      // ignore and try next
+    }
+  }
+  if (required) {
+    throw new Error("字段不存在：" + tried.join("/") + "（请检查字段名是否一致）");
+  }
+  return { field: null, picked: "", tried: tried };
+}
+
+        // 你要识别的 7 个字段（带兼容别名）
+        var codeRes = await getFieldByAnyName(table, ["产品编号", "产品编码", "编号", "编码"], true);
+        var nameRes = await getFieldByAnyName(table, ["产品名称", "名称"], true);
+        var typeRes = await getFieldByAnyName(table, ["产品类型", "类型"], false);
+        var unitRes = await getFieldByAnyName(table, ["计算单位", "单位"], false);
+        var costRes = await getFieldByAnyName(table, ["成本单价", "成本", "成本价"], false);
+        var priceRes = await getFieldByAnyName(table, ["单价", "售价", "报价"], true);
+        var descRes = await getFieldByAnyName(table, ["产品描述", "描述", "备注"], false);
+        
+        var codeField = codeRes.field;
+        var nameField = nameRes.field;
+        var typeField = typeRes.field;
+        var unitField = unitRes.field;
+        var costField = costRes.field;
+        var priceField = priceRes.field;
+        var descField = descRes.field;
 
         var records = await table.getRecords({ pageSize: 200 });
 
@@ -176,13 +212,21 @@ function waitForBitable(maxMs) {
           var recordId = r.recordId || r.id;
           var fields = r.fields || {};
 
-          var rawName = fields[nameField.id];
           var rawCode = fields[codeField.id];
+          var rawName = fields[nameField.id];
+          var rawType = typeField ? fields[typeField.id] : null;
+          var rawUnit = unitField ? fields[unitField.id] : null;
+          var rawCost = costField ? fields[costField.id] : null;
           var rawPrice = fields[priceField.id];
+          var rawDesc = descField ? fields[descField.id] : null;
 
-          var pname = toPlainText(rawName) || "未命名产品";
           var pcode = toPlainText(rawCode) || "";
+          var pname = toPlainText(rawName) || "未命名产品";
+          var ptype = toPlainText(rawType) || "";
+          var punit = toPlainText(rawUnit) || "";
+          var cost = toNumber(rawCost);
           var price = toNumber(rawPrice);
+          var pdesc = toPlainText(rawDesc) || "";
 
           var row = document.createElement("div");
           row.className = "row";
@@ -192,14 +236,15 @@ function waitForBitable(maxMs) {
 
           var mid = document.createElement("div");
           mid.innerHTML =
-            '<div class="pname">' +
-            pname +
+            '<div class="pname">' + pname + "</div>" +
+            '<div class="pmeta">' +
+              "编号：" + (pcode || "—") +
+              (ptype ? "　类型：" + ptype : "") +
+              (punit ? "　单位：" + punit : "") +
+              "　单价：¥" + price +
+              (costRes.field ? "　成本：¥" + cost : "") +
             "</div>" +
-            '<div class="pmeta">编码：' +
-            (pcode || "—") +
-            "　单价：¥" +
-            price +
-            "</div>";
+            (pdesc ? '<div class="pmeta">描述：' + pdesc + "</div>" : "");
 
           var qty = document.createElement("input");
           qty.className = "qty";
@@ -213,7 +258,16 @@ function waitForBitable(maxMs) {
             return function () {
               if (this.checked) {
                 qtyEl.disabled = false;
-                selected.set(rid, { name: name, code: code, price: p, qty: Math.max(1, Number(qtyEl.value) || 1) });
+                selected.set(rid, {
+                  code: pcode,
+                  name: pname,
+                  type: ptype,
+                  unit: punit,
+                  cost: cost,
+                  price: price,
+                  desc: pdesc,
+                  qty: Math.max(1, Number(qtyEl.value) || 1),
+                });
               } else {
                 qtyEl.disabled = true;
                 selected.delete(rid);
@@ -263,23 +317,35 @@ function waitForBitable(maxMs) {
         var quoteTable = await bitable.base.getTableByName("报价单");
 
         var customerField = await quoteTable.getFieldByName("客户名称");
-        var productField = await quoteTable.getFieldByName("产品名称");
         var qtyField = await quoteTable.getFieldByName("数量");
-        var priceField = await quoteTable.getFieldByName("单价");
+        
+        // 报价单表的字段：建议和产品表同名；这里做兼容：有就写，没有就跳过
+        var qCode = (await getFieldByAnyName(quoteTable, ["产品编号", "产品编码"], false)).field;
+        var qName = (await getFieldByAnyName(quoteTable, ["产品名称", "名称"], true)).field;
+        var qType = (await getFieldByAnyName(quoteTable, ["产品类型", "类型"], false)).field;
+        var qUnit = (await getFieldByAnyName(quoteTable, ["计算单位", "单位"], false)).field;
+        var qCost = (await getFieldByAnyName(quoteTable, ["成本单价", "成本", "成本价"], false)).field;
+        var qPrice = (await getFieldByAnyName(quoteTable, ["单价", "售价", "报价"], true)).field;
+        var qDesc = (await getFieldByAnyName(quoteTable, ["产品描述", "描述", "备注"], false)).field;
 
         var count = 0;
         selected.forEach(async function () {});
 
         // 逐条写入
         for (const it of selected.values()) {
-          await quoteTable.addRecord({
-            fields: {
-              [customerField.id]: asRichText(cname),
-              [productField.id]: asRichText(it.name),
-              [qtyField.id]: it.qty,
-              [priceField.id]: it.price,
-            },
-          });
+          var fs = {};
+          fs[customerField.id] = asRichText(cname);
+          fs[qtyField.id] = it.qty;
+        
+          if (qCode) fs[qCode.id] = asRichText(it.code);
+          if (qName) fs[qName.id] = asRichText(it.name);
+          if (qType) fs[qType.id] = asRichText(it.type);
+          if (qUnit) fs[qUnit.id] = asRichText(it.unit);
+          if (qCost) fs[qCost.id] = it.cost;
+          if (qPrice) fs[qPrice.id] = it.price;
+          if (qDesc) fs[qDesc.id] = asRichText(it.desc);
+        
+          await quoteTable.addRecord({ fields: fs });
           count++;
         }
 
