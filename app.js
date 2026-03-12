@@ -31,9 +31,7 @@
     if (typeof v === "object") {
       if (typeof v.text === "string") return v.text;
 
-      // 常见：自动编号/公式等字段返回 { value: "...", ... }
       if (v && (typeof v.value === "string" || typeof v.value === "number")) return String(v.value);
-
       if (v && typeof v.name === "string") return v.name;
 
       try {
@@ -104,7 +102,6 @@
     return { field: null, picked: "" };
   }
 
-  // Base JS SDK: getRecords() -> { records, hasMore, pageToken, total }
   async function getAllRecords(table, pageSize) {
     var all = [];
     var token = undefined;
@@ -140,14 +137,7 @@
     return metas;
   }
 
-  function csvEscape(s) {
-    var x = String(s == null ? "" : s);
-    if (/[",\r\n]/.test(x)) return '"' + x.replace(/"/g, '""') + '"';
-    return x;
-  }
-
-  function downloadText(filename, text, mime) {
-    var blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+  function downloadBlob(filename, blob) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
@@ -173,19 +163,191 @@
     return String(tableId) + ":" + String(recordId);
   }
 
+  function normalizeNewlines(s) {
+    return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  }
+
+  function safeFileName(name) {
+    var s = String(name || "").trim();
+    if (!s) return "报价单";
+    s = s.replace(/[\\/:*?"<>|]+/g, "_").trim();
+    return s || "报价单";
+  }
+
+  function getQuoteNameInput() {
+    return document.getElementById("quoteFileName");
+  }
+
+  function loadQuoteName() {
+    try {
+      return localStorage.getItem("quote_filename") || "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function saveQuoteName(v) {
+    try {
+      localStorage.setItem("quote_filename", String(v || ""));
+    } catch (e) {}
+  }
+
+  // 中文为主：把 CJK 大致按 2 个“宽度单位”估算，更接近 Excel 换行效果
+  function visualUnits(s) {
+    var str = String(s || "");
+    var units = 0;
+    for (var i = 0; i < str.length; i++) {
+      var ch = str.charAt(i);
+      if (/[\u2E80-\u9FFF\uF900-\uFAFF]/.test(ch)) units += 2; // CJK 及部首等
+      else units += 1;
+    }
+    return units;
+  }
+
+  function estimateLines(text, colWidthChars) {
+    var s = normalizeNewlines(text);
+    if (!s) return 1;
+
+    var width = Math.max(1, Math.floor(Number(colWidthChars) || 9));
+    var parts = s.split("\n");
+    var total = 0;
+
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i] || "";
+      var lenUnits = visualUnits(p);
+      total += Math.max(1, Math.ceil(lenUnits / width));
+    }
+
+    return Math.max(1, total);
+  }
+
+  function rowHeightByLines(maxLines) {
+    if (maxLines <= 1) return 20;
+    if (maxLines === 2) return 40;
+    return 50;
+  }
+
+  async function exportXlsx(selected, quoteName) {
+    if (!window.ExcelJS || !window.ExcelJS.Workbook) {
+      throw new Error("ExcelJS 未加载：请检查 index.html 是否已引入 exceljs.min.js");
+    }
+
+    var fileTitle = safeFileName(quoteName || "报价单");
+
+    var wb = new window.ExcelJS.Workbook();
+    wb.creator = "Feishu Quote Plugin";
+    wb.created = new Date();
+
+    var ws = wb.addWorksheet("报价单", {
+      properties: { defaultRowHeight: 20 },
+    });
+
+    var headers = [
+      "产品编号",
+      "产品类型",
+      "尺寸/天数",
+      "数量",
+      "单位",
+      "成本单价",
+      "成本总价",
+      "单价",
+      "总价",
+      "产品描述",
+    ];
+
+    // 需求2：B=24, C=24, J=35，其它=9
+    var colWidths = [9, 24, 24, 9, 9, 9, 9, 9, 9, 35];
+    for (var c = 1; c <= colWidths.length; c++) {
+      ws.getColumn(c).width = colWidths[c - 1];
+    }
+
+    // 需求5：表头上方加一行标题（合并 A1:J1）
+    ws.addRow([fileTitle]);
+    ws.mergeCells(1, 1, 1, headers.length);
+
+    var titleCell = ws.getCell(1, 1);
+    titleCell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFED7D31" }, // ARGB：FF + ED7D31
+    };
+    titleCell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 16 };
+    titleCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    ws.getRow(1).height = 30;
+
+    // 表头行（第2行）
+    ws.addRow(headers);
+    var headerRow = ws.getRow(2);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    headerRow.height = 20;
+
+    // 数据行从第3行开始
+    var rowNum = 3;
+    selected.forEach(function (it) {
+      var desc = normalizeNewlines(it.desc || "");
+
+      var row = ws.getRow(rowNum);
+      row.getCell(1).value = it.code || "";
+      row.getCell(2).value = it.sourceTableName || "";
+      row.getCell(3).value = it.sizeDays || "";
+      row.getCell(4).value = Math.max(1, Number(it.qty) || 1);
+      row.getCell(5).value = it.unit || "";
+      row.getCell(6).value = Number(it.cost || 0);
+      row.getCell(7).value = { formula: "F" + rowNum + "*D" + rowNum };
+      row.getCell(8).value = Number(it.price || 0);
+      row.getCell(9).value = { formula: "H" + rowNum + "*D" + rowNum };
+      row.getCell(10).value = desc;
+
+      // 需求2：自动换行 + 行高按本行最大内容行数设置
+      var maxLines = 1;
+      for (var ci = 1; ci <= headers.length; ci++) {
+        var cell = ws.getCell(rowNum, ci);
+        cell.alignment = { vertical: "middle", wrapText: true };
+
+        var v = cell.value;
+        if (v && typeof v === "object" && v.formula) continue; // 公式列按1行估算
+        if (typeof v === "number") continue;
+
+        var t = v == null ? "" : String(v);
+        var w = ws.getColumn(ci).width || 9;
+        maxLines = Math.max(maxLines, estimateLines(t, w));
+      }
+
+      row.height = rowHeightByLines(Math.min(3, maxLines));
+      rowNum++;
+    });
+
+    var buf = await wb.xlsx.writeBuffer();
+    var blob = new Blob([buf], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    downloadBlob(fileTitle + ".xlsx", blob);
+  }
+
   async function main() {
     clearMsg();
 
     var tableListEl = document.getElementById("tableList");
     var productList = document.getElementById("productList");
-    var exportBtn = document.getElementById("exportCsv");
+    var exportBtn = document.getElementById("exportXlsx");
     var selectAllBtn = document.getElementById("selectAllTables");
     var clearAllBtn = document.getElementById("clearAllTables");
     var reloadBtn = document.getElementById("reloadProducts");
+    var quoteNameInput = getQuoteNameInput();
 
     if (!tableListEl || !productList || !exportBtn) {
       setMsg("页面元素缺失：请确认 index.html 与 app.js 已正确上传。", "err");
       return;
+    }
+
+    if (quoteNameInput) {
+      var cached = loadQuoteName();
+      if (cached) quoteNameInput.value = cached;
+      quoteNameInput.addEventListener("input", function () {
+        saveQuoteName(this.value || "");
+      });
     }
 
     var bitable;
@@ -199,7 +361,6 @@
       return;
     }
 
-    // key(tableId:recordId) -> item
     var selected = new Map();
     var metas = [];
 
@@ -246,7 +407,6 @@
     async function loadProductsFromTable(meta) {
       var table = await bitable.base.getTableById(meta.id);
 
-      // 按你的新要求：不再使用“产品类型”字段；产品类型来自数据表名称
       var fCode = (await getFieldByAnyName(table, ["产品编号"], true)).field;
       var fName = (await getFieldByAnyName(table, ["产品名称"], true)).field;
       var fSizeDays = (await getFieldByAnyName(table, ["尺寸/天数"], true)).field;
@@ -265,7 +425,7 @@
 
         items.push({
           sourceTableId: meta.id,
-          sourceTableName: meta.name, // 输出“产品类型”
+          sourceTableName: meta.name,
           recordId: recordId,
 
           code: toPlainText(fields[fCode.id]) || "",
@@ -378,7 +538,12 @@
           var items = await loadProductsFromTable(selectedMetas[j]);
           allItems = allItems.concat(items);
         } catch (e) {
-          warnings.push("表【" + selectedMetas[j].name + "】加载失败：" + (e && e.message ? e.message : String(e)));
+          warnings.push(
+            "表【" +
+              selectedMetas[j].name +
+              "】加载失败：" +
+              (e && e.message ? e.message : String(e))
+          );
         }
       }
 
@@ -423,62 +588,16 @@
         return;
       }
 
-      // 列顺序固定：
-      // A 产品编号
-      // B 产品类型(表名)
-      // C 尺寸/天数
-      // D 数量
-      // E 单位
-      // F 成本单价
-      // G 成本总价(公式)=F*D
-      // H 单价
-      // I 总价(公式)=H*D
-      // J 产品描述
-      var lines = [];
-      lines.push([
-        "产品编号",
-        "产品类型",
-        "尺寸/天数",
-        "数量",
-        "单位",
-        "成本单价",
-        "成本总价",
-        "单价",
-        "总价",
-        "产品描述",
-      ]);
+      var quoteName = quoteNameInput ? quoteNameInput.value : "";
+      if (!quoteName) quoteName = loadQuoteName() || "报价单";
 
-      var rowIndex = 2; // 第 1 行是表头，数据从第 2 行开始
-      selected.forEach(function (it) {
-        // 公式用 A1 引用：成本总价=F{row}*D{row}，总价=H{row}*D{row}
-        var costTotalFormula = "=F" + rowIndex + "*D" + rowIndex;
-        var totalFormula = "=H" + rowIndex + "*D" + rowIndex;
-
-        lines.push([
-          it.code || "",
-          it.sourceTableName || "",
-          it.sizeDays || "",
-          String(it.qty || 1),
-          it.unit || "",
-          String(it.cost || 0),
-          costTotalFormula,
-          String(it.price || 0),
-          totalFormula,
-          (it.desc || "").replace(/\r?\n/g, " "),
-        ]);
-
-        rowIndex++;
-      });
-
-      var csv = lines
-        .map(function (row) {
-          return row.map(csvEscape).join(",");
+      exportXlsx(selected, quoteName)
+        .then(function () {
+          setMsg("已导出 XLSX（含公式/列宽/换行/行高/标题行）。", "ok");
         })
-        .join("\r\n");
-
-      var filename = "报价单.csv";
-      downloadText(filename, csv, "text/csv;charset=utf-8");
-      setMsg("已导出 CSV（含公式）：请在飞书在线表格中导入。", "ok");
+        .catch(function (e) {
+          setMsg("导出失败：" + (e && e.message ? e.message : String(e)), "err");
+        });
     });
 
     renderTableCheckboxes();
