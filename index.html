@@ -26,40 +26,30 @@
           "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
       }
 
-      .card {
+      .container {
+        max-width: 560px;
+        margin: 0 auto;
         background: var(--card);
         border: 1px solid rgba(0, 0, 0, 0.06);
         border-radius: 12px;
         padding: 16px;
         box-shadow: 0 6px 20px rgba(31, 35, 41, 0.06);
-        max-width: 520px;
-        margin: 0 auto;
       }
 
-      h1 {
-        font-size: 20px;
+      h2 {
         margin: 0 0 12px 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .tag {
-        font-size: 12px;
-        color: var(--muted);
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: 2px 8px;
+        font-size: 20px;
       }
 
       .section {
         margin-top: 14px;
       }
 
-      .label {
-        font-size: 13px;
+      .hint {
+        font-size: 12px;
         color: var(--muted);
-        margin-bottom: 8px;
+        margin-top: 8px;
+        line-height: 1.5;
       }
 
       select,
@@ -78,13 +68,6 @@
       input:focus {
         border-color: rgba(51, 112, 255, 0.6);
         box-shadow: 0 0 0 3px rgba(51, 112, 255, 0.12);
-      }
-
-      .hint {
-        font-size: 12px;
-        color: var(--muted);
-        margin-top: 8px;
-        line-height: 1.5;
       }
 
       .products {
@@ -118,6 +101,7 @@
         font-size: 12px;
         color: var(--muted);
         margin-top: 2px;
+        line-height: 1.5;
       }
 
       .qty {
@@ -167,52 +151,61 @@
   </head>
 
   <body>
-  <div class="container">
-    <h2>📋 报价系统</h2>
+    <div class="container">
+      <h2>📋 报价系统</h2>
 
-    <div class="section">
-      <h3>步骤1：选择产品库表</h3>
-      <select id="tableSelect" class="select-box">
-        <option value="">请选择产品库表...</option>
-      </select>
-      <p class="hint">提示：这里会列出当前多维表格文件里的所有数据表。</p>
-    </div>
-
-    <div class="section">
-      <h3>步骤1.1：选择报价单表</h3>
-      <select id="quoteTableSelect" class="select-box">
-        <option value="">自动查找（默认找：报价单）</option>
-      </select>
-      <p class="hint">提示：如果你没有叫“报价单”的表，请在这里手动选择要写入的表。</p>
-    </div>
-
-    <div class="section">
-      <h3>步骤2：选择产品</h3>
-      <div id="productList" class="product-list">
-        <p class="hint">请先选择产品库表</p>
+      <div class="section">
+        <h3>步骤1：选择产品库表</h3>
+        <select id="tableSelect">
+          <option value="">请选择产品库表...</option>
+        </select>
+        <p class="hint">提示：这里会列出当前多维表格文件里的所有数据表。</p>
       </div>
+
+      <div class="section">
+        <h3>步骤2：选择产品</h3>
+        <div id="productList" class="products">
+          <p class="hint">请先选择产品库表</p>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>步骤3：客户信息</h3>
+        <input type="text" id="customerName" placeholder="请输入客户名称" />
+      </div>
+
+      <div class="section">
+        <h3>步骤4：输出方式</h3>
+        <select id="outputMode">
+          <option value="csv">导出 CSV（推荐，可导入飞书在线表格）</option>
+          <option value="bitable">写入多维表格（选择目标表）</option>
+        </select>
+
+        <div class="hint">
+          说明：如果你要“飞书在线表格（Sheets）自动写入”，纯前端静态页面做不到（需要后端 + OpenAPI）。
+          这里先提供 CSV 导出，导入在线表格即可。
+        </div>
+
+        <div class="section">
+          <select id="quoteTableSelect">
+            <option value="">请选择写入的目标表...</option>
+          </select>
+          <p class="hint">仅当“输出方式=写入多维表格”时使用。</p>
+        </div>
+      </div>
+
+      <button id="generateQuote" class="btn">🎯 生成报价单</button>
+
+      <div id="message" class="msg"></div>
     </div>
 
-    <div class="section">
-      <h3>步骤3：客户信息</h3>
-      <input type="text" id="customerName" placeholder="请输入客户名称" class="input-box" />
-    </div>
+    <!-- 1) 注入 Base JS SDK 到 window.bitable -->
+    <script type="module">
+      import { bitable } from "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.mjs";
+      window.bitable = bitable;
+    </script>
 
-    <div class="section">
-      <button id="generateQuote" class="btn-primary">🎯 生成报价单</button>
-    </div>
-
-    <div id="message" class="msg"></div>
-  </div>
-
-  <!-- 1) 先把 Base JS SDK 注入到 window.bitable（给 app.js 用） -->
-<script type="module">
-  import { bitable } from "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.mjs";
-  window.bitable = bitable;
-</script>
-
-<!-- 2) 再加载你的业务逻辑 -->
-<script src="./app.js" defer></script>
-</body>
+    <!-- 2) 业务逻辑 -->
+    <script src="./app.js" defer></script>
+  </body>
 </html>
-
