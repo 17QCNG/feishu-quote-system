@@ -27,7 +27,7 @@
       }
 
       .container {
-        max-width: 560px;
+        max-width: 680px;
         margin: 0 auto;
         background: var(--card);
         border: 1px solid rgba(0, 0, 0, 0.06);
@@ -41,6 +41,11 @@
         font-size: 20px;
       }
 
+      h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+      }
+
       .section {
         margin-top: 14px;
       }
@@ -52,34 +57,62 @@
         line-height: 1.5;
       }
 
-      select,
-      input {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 10px 12px;
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        font-size: 14px;
-        background: #fff;
-        outline: none;
+      .rowline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
       }
 
-      select:focus,
-      input:focus {
-        border-color: rgba(51, 112, 255, 0.6);
-        box-shadow: 0 0 0 3px rgba(51, 112, 255, 0.12);
+      .smallbtn {
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text);
+      }
+
+      .smallbtn:hover {
+        background: #f7f8fa;
+      }
+
+      .tables {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: #fff;
+        max-height: 200px;
+        overflow: auto;
+      }
+
+      .table-item {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 6px 4px;
+        border-bottom: 1px solid rgba(222, 224, 227, 0.6);
+      }
+
+      .table-item:last-child {
+        border-bottom: none;
+      }
+
+      .table-name {
+        font-size: 13px;
       }
 
       .products {
         border: 1px solid var(--line);
         border-radius: 10px;
         padding: 10px;
-        max-height: 280px;
+        max-height: 340px;
         overflow: auto;
         background: #fff;
       }
 
-      .row {
+      .prow {
         display: grid;
         grid-template-columns: 20px 1fr 88px;
         gap: 10px;
@@ -88,7 +121,7 @@
         border-bottom: 1px solid rgba(222, 224, 227, 0.6);
       }
 
-      .row:last-child {
+      .prow:last-child {
         border-bottom: none;
       }
 
@@ -108,6 +141,7 @@
         width: 88px;
         padding: 8px 10px;
         border-radius: 10px;
+        border: 1px solid var(--line);
       }
 
       .btn {
@@ -132,6 +166,7 @@
         padding: 10px 12px;
         border-radius: 10px;
         font-size: 13px;
+        white-space: pre-wrap;
       }
 
       .msg.ok {
@@ -155,57 +190,41 @@
       <h2>📋 报价系统</h2>
 
       <div class="section">
-        <h3>步骤1：选择产品库表</h3>
-        <select id="tableSelect">
-          <option value="">请选择产品库表...</option>
-        </select>
-        <p class="hint">提示：这里会列出当前多维表格文件里的所有数据表。</p>
+        <h3>步骤1：选择产品库表（可多选）</h3>
+
+        <div class="rowline">
+          <button id="selectAllTables" class="smallbtn" type="button">全选</button>
+          <button id="clearAllTables" class="smallbtn" type="button">全不选</button>
+          <button id="reloadProducts" class="smallbtn" type="button">重新加载产品</button>
+        </div>
+
+        <div id="tableList" class="tables">
+          <div class="hint">加载中...</div>
+        </div>
+
+        <div class="hint">
+          输出列固定为：产品编号、产品类型(数据表名)、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。
+        </div>
       </div>
 
       <div class="section">
         <h3>步骤2：选择产品</h3>
         <div id="productList" class="products">
-          <p class="hint">请先选择产品库表</p>
+          <div class="hint">请先在步骤1勾选至少一个数据表</div>
         </div>
       </div>
 
-      <div class="section">
-        <h3>步骤3：客户信息</h3>
-        <input type="text" id="customerName" placeholder="请输入客户名称" />
-      </div>
-
-      <div class="section">
-        <h3>步骤4：输出方式</h3>
-        <select id="outputMode">
-          <option value="csv">导出 CSV（推荐，可导入飞书在线表格）</option>
-          <option value="bitable">写入多维表格（选择目标表）</option>
-        </select>
-
-        <div class="hint">
-          说明：如果你要“飞书在线表格（Sheets）自动写入”，纯前端静态页面做不到（需要后端 + OpenAPI）。
-          这里先提供 CSV 导出，导入在线表格即可。
-        </div>
-
-        <div class="section">
-          <select id="quoteTableSelect">
-            <option value="">请选择写入的目标表...</option>
-          </select>
-          <p class="hint">仅当“输出方式=写入多维表格”时使用。</p>
-        </div>
-      </div>
-
-      <button id="generateQuote" class="btn">🎯 生成报价单</button>
+      <button id="exportCsv" class="btn" type="button">📤 导出报价单 CSV（带公式）</button>
 
       <div id="message" class="msg"></div>
     </div>
 
-    <!-- 1) 注入 Base JS SDK 到 window.bitable -->
+    <!-- 注入 Base JS SDK 到 window.bitable -->
     <script type="module">
       import { bitable } from "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.mjs";
       window.bitable = bitable;
     </script>
 
-    <!-- 2) 业务逻辑 -->
     <script src="./app.js" defer></script>
   </body>
 </html>
