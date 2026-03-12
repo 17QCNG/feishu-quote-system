@@ -197,7 +197,14 @@
     <div id="message" class="message"></div>
   </div>
 
-  <script type="module" src="/src/index.ts"></script>
+  <!-- 1) 先把 Base JS SDK 注入到 window.bitable（给 app.js 用） -->
+<script type="module">
+  import { bitable } from "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.mjs";
+  window.bitable = bitable;
+</script>
+
+<!-- 2) 再加载你的业务逻辑 -->
+<script src="./app.js" defer></script>
 </body>
 </html>
 
