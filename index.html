@@ -144,6 +144,15 @@
         border: 1px solid var(--line);
       }
 
+      .input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        box-sizing: border-box;
+        font-size: 13px;
+      }
+
       .btn {
         margin-top: 14px;
         width: 100%;
@@ -190,6 +199,19 @@
       <h2>📋 报价系统</h2>
 
       <div class="section">
+        <h3>报价单设置</h3>
+        <input
+          id="quoteFileName"
+          class="input"
+          type="text"
+          placeholder="例如：XX项目报价单（导出为 .xlsx）"
+        />
+        <div class="hint">
+          该名称会写入表头上方标题行，并作为导出文件名（自动追加 .xlsx）。
+        </div>
+      </div>
+
+      <div class="section">
         <h3>步骤1：选择产品库表（可多选）</h3>
 
         <div class="rowline">
@@ -214,10 +236,13 @@
         </div>
       </div>
 
-      <button id="exportCsv" class="btn" type="button">📤 导出报价单 CSV（带公式）</button>
+      <button id="exportXlsx" class="btn" type="button">📤 导出报价单 XLSX（带公式）</button>
 
       <div id="message" class="msg"></div>
     </div>
+
+    <!-- ExcelJS：生成 .xlsx（支持合并单元格/样式/列宽/行高/自动换行） -->
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 
     <!-- 注入 Base JS SDK 到 window.bitable -->
     <script type="module">
