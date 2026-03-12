@@ -31,11 +31,10 @@
     if (typeof v === "object") {
       if (typeof v.text === "string") return v.text;
 
-      // 关键：很多字段（自动编号/公式等）会返回 { value: "1", ... }
-      if (typeof v.value === "string" || typeof v.value === "number") return String(v.value);
+      // 常见：自动编号/公式等字段返回 { value: "...", ... }
+      if (v && (typeof v.value === "string" || typeof v.value === "number")) return String(v.value);
 
-      // 某些选择/人员对象可能有 name
-      if (typeof v.name === "string") return v.name;
+      if (v && typeof v.name === "string") return v.name;
 
       try {
         return JSON.stringify(v);
@@ -53,10 +52,6 @@
     var s = toPlainText(v);
     var n = Number(s);
     return isFinite(n) ? n : 0;
-  }
-
-  function asRichText(text) {
-    return [{ type: "text", text: text || "" }];
   }
 
   function getBitableMaybe() {
@@ -109,7 +104,7 @@
     return { field: null, picked: "" };
   }
 
-  // getRecords() 返回 { records, hasMore, pageToken, total }，这里拉全量（最多每页 200，循环分页）
+  // Base JS SDK: getRecords() -> { records, hasMore, pageToken, total }
   async function getAllRecords(table, pageSize) {
     var all = [];
     var token = undefined;
@@ -163,17 +158,32 @@
     URL.revokeObjectURL(url);
   }
 
+  function getSelectedTableIds() {
+    var box = document.getElementById("tableList");
+    if (!box) return [];
+    var inputs = box.querySelectorAll('input[type="checkbox"][data-table-id]');
+    var ids = [];
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].checked) ids.push(inputs[i].getAttribute("data-table-id"));
+    }
+    return ids;
+  }
+
+  function buildKey(tableId, recordId) {
+    return String(tableId) + ":" + String(recordId);
+  }
+
   async function main() {
     clearMsg();
 
-    var tableSelect = document.getElementById("tableSelect");
+    var tableListEl = document.getElementById("tableList");
     var productList = document.getElementById("productList");
-    var customerName = document.getElementById("customerName");
-    var outputMode = document.getElementById("outputMode");
-    var quoteTableSelect = document.getElementById("quoteTableSelect");
-    var generateBtn = document.getElementById("generateQuote");
+    var exportBtn = document.getElementById("exportCsv");
+    var selectAllBtn = document.getElementById("selectAllTables");
+    var clearAllBtn = document.getElementById("clearAllTables");
+    var reloadBtn = document.getElementById("reloadProducts");
 
-    if (!tableSelect || !productList || !customerName || !outputMode || !quoteTableSelect || !generateBtn) {
+    if (!tableListEl || !productList || !exportBtn) {
       setMsg("页面元素缺失：请确认 index.html 与 app.js 已正确上传。", "err");
       return;
     }
@@ -189,11 +199,10 @@
       return;
     }
 
-    // 选中产品：recordId -> item
+    // key(tableId:recordId) -> item
     var selected = new Map();
-
-    // 加载表列表（给产品表/目标表下拉框）
     var metas = [];
+
     try {
       metas = await getAllTables(bitable);
     } catch (e2) {
@@ -201,270 +210,279 @@
       return;
     }
 
-    tableSelect.innerHTML = '<option value="">请选择产品库表...</option>';
-    quoteTableSelect.innerHTML = '<option value="">请选择写入的目标表...</option>';
+    function renderTableCheckboxes() {
+      tableListEl.innerHTML = "";
+      if (!metas || metas.length === 0) {
+        tableListEl.innerHTML = '<div class="hint">当前 Base 没有数据表</div>';
+        return;
+      }
 
-    for (var m = 0; m < metas.length; m++) {
-      var opt = document.createElement("option");
-      opt.value = metas[m].id;
-      opt.textContent = metas[m].name;
-      tableSelect.appendChild(opt);
+      for (var i = 0; i < metas.length; i++) {
+        var meta = metas[i];
 
-      var opt2 = document.createElement("option");
-      opt2.value = metas[m].id;
-      opt2.textContent = metas[m].name;
-      quoteTableSelect.appendChild(opt2);
+        var item = document.createElement("div");
+        item.className = "table-item";
+
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.setAttribute("data-table-id", meta.id);
+
+        var name = document.createElement("div");
+        name.className = "table-name";
+        name.textContent = meta.name;
+
+        cb.addEventListener("change", function () {
+          refreshProducts().catch(function (e) {
+            setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
+          });
+        });
+
+        item.appendChild(cb);
+        item.appendChild(name);
+        tableListEl.appendChild(item);
+      }
     }
 
-    // 切换输出方式时给个提示
-    outputMode.addEventListener("change", function () {
-      clearMsg();
-      if (outputMode.value === "bitable") {
-        setMsg("已切换为：写入多维表格。请在下方选择“写入的目标表”。", "ok");
-      } else {
-        setMsg("已切换为：导出 CSV。生成后可在飞书在线表格中导入。", "ok");
+    async function loadProductsFromTable(meta) {
+      var table = await bitable.base.getTableById(meta.id);
+
+      // 按你的新要求：不再使用“产品类型”字段；产品类型来自数据表名称
+      var fCode = (await getFieldByAnyName(table, ["产品编号"], true)).field;
+      var fName = (await getFieldByAnyName(table, ["产品名称"], true)).field;
+      var fSizeDays = (await getFieldByAnyName(table, ["尺寸/天数"], true)).field;
+      var fUnit = (await getFieldByAnyName(table, ["计算单位"], true)).field;
+      var fCost = (await getFieldByAnyName(table, ["成本单价"], true)).field;
+      var fPrice = (await getFieldByAnyName(table, ["单价"], true)).field;
+      var fDesc = (await getFieldByAnyName(table, ["产品描述"], false)).field;
+
+      var records = await getAllRecords(table, 200);
+      var items = [];
+
+      for (var i = 0; i < records.length; i++) {
+        var r = records[i];
+        var recordId = r.recordId || r.id;
+        var fields = r.fields || {};
+
+        items.push({
+          sourceTableId: meta.id,
+          sourceTableName: meta.name, // 输出“产品类型”
+          recordId: recordId,
+
+          code: toPlainText(fields[fCode.id]) || "",
+          name: toPlainText(fields[fName.id]) || "未命名产品",
+          sizeDays: toPlainText(fields[fSizeDays.id]) || "",
+          unit: toPlainText(fields[fUnit.id]) || "",
+          cost: toNumber(fields[fCost.id]),
+          price: toNumber(fields[fPrice.id]),
+          desc: fDesc ? (toPlainText(fields[fDesc.id]) || "") : "",
+
+          qty: 1,
+        });
       }
-      setTimeout(function () {
-        clearMsg();
-      }, 1500);
-    });
 
-    tableSelect.addEventListener("change", async function () {
-      clearMsg();
-      selected.clear();
+      return items;
+    }
 
-      var tableId = tableSelect.value;
-      if (!tableId) {
-        productList.innerHTML = '<p class="hint">请先选择产品库表</p>';
+    function renderProducts(allItems) {
+      productList.innerHTML = "";
+
+      if (!allItems || allItems.length === 0) {
+        productList.innerHTML = '<div class="hint">选中的数据表没有可用产品（可能无记录）。</div>';
         return;
       }
 
-      productList.innerHTML = '<p class="hint">加载中...</p>';
+      for (var i = 0; i < allItems.length; i++) {
+        var item = allItems[i];
+        var key = buildKey(item.sourceTableId, item.recordId);
+        var picked = selected.get(key);
 
-      try {
-        var table = await bitable.base.getTableById(tableId);
+        var row = document.createElement("div");
+        row.className = "prow";
 
-        // 你要求识别的 7 个字段（这里带少量兼容别名，避免你以后改名）
-        var codeRes = await getFieldByAnyName(table, ["产品编号", "产品编码", "编号", "编码"], true);
-        var nameRes = await getFieldByAnyName(table, ["产品名称", "名称"], true);
-        var typeRes = await getFieldByAnyName(table, ["产品类型", "类型"], false);
-        var unitRes = await getFieldByAnyName(table, ["计算单位", "单位"], false);
-        var costRes = await getFieldByAnyName(table, ["成本单价", "成本", "成本价"], false);
-        var priceRes = await getFieldByAnyName(table, ["单价", "售价", "报价"], true);
-        var descRes = await getFieldByAnyName(table, ["产品描述", "描述", "备注"], false);
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!picked;
 
-        var codeField = codeRes.field;
-        var nameField = nameRes.field;
-        var typeField = typeRes.field;
-        var unitField = unitRes.field;
-        var costField = costRes.field;
-        var priceField = priceRes.field;
-        var descField = descRes.field;
+        var mid = document.createElement("div");
+        mid.innerHTML =
+          '<div class="pname">' + item.name + "</div>" +
+          '<div class="pmeta">' +
+            "产品类型：" + (item.sourceTableName || "—") +
+            "　编号：" + (item.code || "—") +
+            "　尺寸/天数：" + (item.sizeDays || "—") +
+            "　单位：" + (item.unit || "—") +
+            "　成本：¥" + (item.cost || 0) +
+            "　单价：¥" + (item.price || 0) +
+          "</div>" +
+          (item.desc ? '<div class="pmeta">描述：' + item.desc + "</div>" : "");
 
-        var records = await getAllRecords(table, 200);
+        var qty = document.createElement("input");
+        qty.className = "qty";
+        qty.type = "number";
+        qty.min = "1";
+        qty.step = "1";
+        qty.value = String(picked ? picked.qty : 1);
+        qty.disabled = !picked;
 
-        if (!records || records.length === 0) {
-          productList.innerHTML = '<p class="hint">该表没有记录，请先添加产品数据。</p>';
-          return;
-        }
-
-        productList.innerHTML = "";
-
-        for (var i = 0; i < records.length; i++) {
-          var r = records[i];
-          var recordId = r.recordId || r.id;
-          var fields = r.fields || {};
-
-          var item = {
-            code: toPlainText(fields[codeField.id]) || "",
-            name: toPlainText(fields[nameField.id]) || "未命名产品",
-            type: typeField ? (toPlainText(fields[typeField.id]) || "") : "",
-            unit: unitField ? (toPlainText(fields[unitField.id]) || "") : "",
-            cost: costField ? toNumber(fields[costField.id]) : 0,
-            price: toNumber(fields[priceField.id]),
-            desc: descField ? (toPlainText(fields[descField.id]) || "") : "",
-            qty: 1,
+        cb.addEventListener("change", (function (k, it, qtyEl) {
+          return function () {
+            if (this.checked) {
+              qtyEl.disabled = false;
+              var next = Object.assign({}, it);
+              next.qty = Math.max(1, Number(qtyEl.value) || 1);
+              selected.set(k, next);
+            } else {
+              qtyEl.disabled = true;
+              selected.delete(k);
+            }
           };
+        })(key, item, qty));
 
-          var row = document.createElement("div");
-          row.className = "row";
+        qty.addEventListener("input", (function (k2, qtyEl2) {
+          return function () {
+            var it2 = selected.get(k2);
+            if (!it2) return;
+            it2.qty = Math.max(1, Number(qtyEl2.value) || 1);
+            selected.set(k2, it2);
+          };
+        })(key, qty));
 
-          var cb = document.createElement("input");
-          cb.type = "checkbox";
-
-          var mid = document.createElement("div");
-          mid.innerHTML =
-            '<div class="pname">' + item.name + "</div>" +
-            '<div class="pmeta">' +
-              "编号：" + (item.code || "—") +
-              (item.type ? "　类型：" + item.type : "") +
-              (item.unit ? "　单位：" + item.unit : "") +
-              "　单价：¥" + item.price +
-              (costField ? "　成本：¥" + item.cost : "") +
-            "</div>" +
-            (item.desc ? '<div class="pmeta">描述：' + item.desc + "</div>" : "");
-
-          var qty = document.createElement("input");
-          qty.className = "qty";
-          qty.type = "number";
-          qty.min = "1";
-          qty.step = "1";
-          qty.value = "1";
-          qty.disabled = true;
-
-          cb.addEventListener("change", (function (rid, it, qtyEl) {
-            return function () {
-              if (this.checked) {
-                qtyEl.disabled = false;
-                var next = Object.assign({}, it);
-                next.qty = Math.max(1, Number(qtyEl.value) || 1);
-                selected.set(rid, next);
-              } else {
-                qtyEl.disabled = true;
-                selected.delete(rid);
-              }
-            };
-          })(recordId, item, qty));
-
-          qty.addEventListener("input", (function (rid, qtyEl) {
-            return function () {
-              var it2 = selected.get(rid);
-              if (!it2) return;
-              it2.qty = Math.max(1, Number(qtyEl.value) || 1);
-              selected.set(rid, it2);
-            };
-          })(recordId, qty));
-
-          row.appendChild(cb);
-          row.appendChild(mid);
-          row.appendChild(qty);
-          productList.appendChild(row);
-        }
-      } catch (e3) {
-        setMsg("加载产品失败：" + (e3 && e3.message ? e3.message : String(e3)), "err");
-        productList.innerHTML = '<p class="hint">加载失败，请检查字段名是否一致。</p>';
+        row.appendChild(cb);
+        row.appendChild(mid);
+        row.appendChild(qty);
+        productList.appendChild(row);
       }
-    });
+    }
 
-    generateBtn.addEventListener("click", async function () {
+    async function refreshProducts() {
       clearMsg();
 
-      var cname = (customerName.value || "").trim();
-      if (!cname) {
-        setMsg("请先填写客户名称。", "err");
+      var ids = getSelectedTableIds();
+      if (!ids || ids.length === 0) {
+        productList.innerHTML = '<div class="hint">请先在步骤1勾选至少一个数据表</div>';
         return;
       }
+
+      productList.innerHTML = '<div class="hint">加载中...</div>';
+
+      var selectedMetas = [];
+      for (var i = 0; i < metas.length; i++) {
+        if (ids.indexOf(metas[i].id) >= 0) selectedMetas.push(metas[i]);
+      }
+
+      var allItems = [];
+      var warnings = [];
+
+      for (var j = 0; j < selectedMetas.length; j++) {
+        try {
+          var items = await loadProductsFromTable(selectedMetas[j]);
+          allItems = allItems.concat(items);
+        } catch (e) {
+          warnings.push("表【" + selectedMetas[j].name + "】加载失败：" + (e && e.message ? e.message : String(e)));
+        }
+      }
+
+      renderProducts(allItems);
+
+      if (warnings.length > 0) {
+        setMsg("部分表无法加载：\n" + warnings.join("\n"), "err");
+      }
+    }
+
+    if (selectAllBtn) {
+      selectAllBtn.addEventListener("click", function () {
+        var inputs = tableListEl.querySelectorAll('input[type="checkbox"][data-table-id]');
+        for (var i = 0; i < inputs.length; i++) inputs[i].checked = true;
+        refreshProducts().catch(function (e) {
+          setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
+        });
+      });
+    }
+
+    if (clearAllBtn) {
+      clearAllBtn.addEventListener("click", function () {
+        var inputs = tableListEl.querySelectorAll('input[type="checkbox"][data-table-id]');
+        for (var i = 0; i < inputs.length; i++) inputs[i].checked = false;
+        productList.innerHTML = '<div class="hint">请先在步骤1勾选至少一个数据表</div>';
+      });
+    }
+
+    if (reloadBtn) {
+      reloadBtn.addEventListener("click", function () {
+        refreshProducts().catch(function (e) {
+          setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
+        });
+      });
+    }
+
+    exportBtn.addEventListener("click", function () {
+      clearMsg();
+
       if (selected.size === 0) {
         setMsg("请至少勾选一个产品。", "err");
         return;
       }
 
-      // 先把明细整理出来（无论导出/写入都用同一份数据）
+      // 列顺序固定：
+      // A 产品编号
+      // B 产品类型(表名)
+      // C 尺寸/天数
+      // D 数量
+      // E 单位
+      // F 成本单价
+      // G 成本总价(公式)=F*D
+      // H 单价
+      // I 总价(公式)=H*D
+      // J 产品描述
       var lines = [];
       lines.push([
-        "客户名称",
         "产品编号",
-        "产品名称",
         "产品类型",
-        "计算单位",
-        "成本单价",
-        "单价",
-        "产品描述",
+        "尺寸/天数",
         "数量",
-        "小计",
+        "单位",
+        "成本单价",
+        "成本总价",
+        "单价",
+        "总价",
+        "产品描述",
       ]);
 
-      var total = 0;
-      var items = [];
-      for (const it of selected.values()) {
-        var subtotal = (Number(it.qty) || 0) * (Number(it.price) || 0);
-        total += subtotal;
+      var rowIndex = 2; // 第 1 行是表头，数据从第 2 行开始
+      selected.forEach(function (it) {
+        // 公式用 A1 引用：成本总价=F{row}*D{row}，总价=H{row}*D{row}
+        var costTotalFormula = "=F" + rowIndex + "*D" + rowIndex;
+        var totalFormula = "=H" + rowIndex + "*D" + rowIndex;
 
-        items.push(it);
         lines.push([
-          cname,
           it.code || "",
-          it.name || "",
-          it.type || "",
+          it.sourceTableName || "",
+          it.sizeDays || "",
+          String(it.qty || 1),
           it.unit || "",
           String(it.cost || 0),
+          costTotalFormula,
           String(it.price || 0),
+          totalFormula,
           (it.desc || "").replace(/\r?\n/g, " "),
-          String(it.qty || 1),
-          String(subtotal),
         ]);
-      }
-      lines.push(["合计", "", "", "", "", "", "", "", "", String(total)]);
 
-      if (outputMode.value === "csv") {
-        var csv = lines
-          .map(function (row) {
-            return row.map(csvEscape).join(",");
-          })
-          .join("\r\n");
+        rowIndex++;
+      });
 
-        downloadText("报价单-" + (cname || "客户") + ".csv", csv, "text/csv;charset=utf-8");
-        setMsg("已导出 CSV：可在飞书在线表格中导入生成报价单。", "ok");
+      var csv = lines
+        .map(function (row) {
+          return row.map(csvEscape).join(",");
+        })
+        .join("\r\n");
 
-        selected.clear();
-        customerName.value = "";
-        tableSelect.dispatchEvent(new Event("change"));
-        return;
-      }
-
-      // 写入多维表格模式
-      var targetTableId = quoteTableSelect.value;
-      if (!targetTableId) {
-        setMsg("请先选择要写入的目标表（输出方式=写入多维表格）。", "err");
-        return;
-      }
-
-      try {
-        var quoteTable = await bitable.base.getTableById(targetTableId);
-
-        // 必需字段：客户名称、数量、产品名称、单价（产品编号也强烈建议）
-        var fCustomer = (await getFieldByAnyName(quoteTable, ["客户名称"], true)).field;
-        var fQty = (await getFieldByAnyName(quoteTable, ["数量"], true)).field;
-        var fName = (await getFieldByAnyName(quoteTable, ["产品名称", "名称"], true)).field;
-        var fPrice = (await getFieldByAnyName(quoteTable, ["单价", "售价", "报价"], true)).field;
-
-        // 可选字段：产品编号/类型/单位/成本/描述
-        var fCode = (await getFieldByAnyName(quoteTable, ["产品编号", "产品编码", "编号", "编码"], false)).field;
-        var fType = (await getFieldByAnyName(quoteTable, ["产品类型", "类型"], false)).field;
-        var fUnit = (await getFieldByAnyName(quoteTable, ["计算单位", "单位"], false)).field;
-        var fCost = (await getFieldByAnyName(quoteTable, ["成本单价", "成本", "成本价"], false)).field;
-        var fDesc = (await getFieldByAnyName(quoteTable, ["产品描述", "描述", "备注"], false)).field;
-
-        var count = 0;
-        for (var i = 0; i < items.length; i++) {
-          var it3 = items[i];
-          var fs = {};
-          fs[fCustomer.id] = asRichText(cname);
-          fs[fQty.id] = it3.qty;
-          fs[fName.id] = asRichText(it3.name);
-          fs[fPrice.id] = it3.price;
-
-          if (fCode) fs[fCode.id] = asRichText(it3.code);
-          if (fType) fs[fType.id] = asRichText(it3.type);
-          if (fUnit) fs[fUnit.id] = asRichText(it3.unit);
-          if (fCost) fs[fCost.id] = it3.cost;
-          if (fDesc) fs[fDesc.id] = asRichText(it3.desc);
-
-          await quoteTable.addRecord({ fields: fs });
-          count++;
-        }
-
-        setMsg("已写入目标表：" + count + " 条报价明细。", "ok");
-
-        selected.clear();
-        customerName.value = "";
-        tableSelect.dispatchEvent(new Event("change"));
-      } catch (e4) {
-        setMsg("写入失败：" + (e4 && e4.message ? e4.message : String(e4)), "err");
-      }
+      var filename = "报价单.csv";
+      downloadText(filename, csv, "text/csv;charset=utf-8");
+      setMsg("已导出 CSV（含公式）：请在飞书在线表格中导入。", "ok");
     });
 
-    setMsg("初始化完成：请选择产品库表开始操作。", "ok");
+    renderTableCheckboxes();
+    setMsg("初始化完成：请在步骤1勾选数据表。", "ok");
   }
 
   if (document.readyState === "loading") {
