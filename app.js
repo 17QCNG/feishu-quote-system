@@ -28,14 +28,16 @@
     }
     if (typeof v === "object") {
       if (typeof v.text === "string") return v.text;
+      // 关键：很多字段会返回 { value: "1", ... } 这种结构（自动编号/公式等）
+      if (v && (typeof v.value === "string" || typeof v.value === "number")) return String(v.value);
+      // 某些选择类字段可能是 { name: "xxx" }
+      if (v && typeof v.name === "string") return v.name;
       try {
         return JSON.stringify(v);
       } catch (e) {
         return "";
       }
     }
-    return String(v);
-  }
 
   function toNumber(v) {
     if (v == null) return 0;
@@ -301,7 +303,14 @@
       }
 
       try {
-        var quoteTable = await bitable.base.getTableByName("报价单");
+        var quoteTable;
+        var qid = quoteTableSelect ? quoteTableSelect.value : "";
+        if (qid) {
+          quoteTable = await bitable.base.getTableById(qid);
+        } else {
+          // 兼容：如果你确实有叫“报价单”的表，就自动找
+          quoteTable = await bitable.base.getTableByName("报价单");
+        }
 
         // 最基本必需字段（建议你的“报价单”表至少有这些）
         var customerField = await quoteTable.getFieldByName("客户名称");
