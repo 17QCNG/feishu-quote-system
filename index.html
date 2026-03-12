@@ -167,43 +167,37 @@
   </head>
 
   <body>
-    <div class="card">
-      <h1>
-        报价系统
-        <span class="tag">Base 插件</span>
-      </h1>
+  <div class="container">
+    <h2>📋 报价系统</h2>
 
-      <div class="section">
-        <div class="label">步骤1：选择产品库表</div>
-        <select id="tableSelect">
-          <option value="">请选择产品库表...</option>
-        </select>
-        <div class="hint">提示：这里会列出当前多维表格文件里的所有数据表。</div>
-      </div>
+    <div class="section">
+      <h3>步骤1：选择产品库表</h3>
+      <select id="tableSelect" class="select-box">
+        <option value="">请选择产品库表...</option>
+      </select>
+      <p class="hint">提示：这里会列出当前多维表格文件里的所有数据表。</p>
+    </div>
 
-      <div class="section">
-        <div class="label">步骤2：选择产品（勾选 + 填数量）</div>
-        <div id="productList" class="products">
-          <div class="hint">请先选择产品库表</div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="label">步骤3：客户信息</div>
-        <input id="customerName" placeholder="请输入客户名称" />
-      </div>
-
-      <button id="generateQuote" class="btn">生成报价单（写入“报价单”表）</button>
-
-      <div id="message" class="msg"></div>
-
-      <div class="hint">
-        说明：本插件会把选中的产品写入同一个多维表格文件里的 <b>“报价单”</b> 数据表。请确保已存在该表，并包含字段：
-        客户名称、产品名称、数量、单价
+    <div class="section">
+      <h3>步骤2：选择产品</h3>
+      <div id="productList" class="product-list">
+        <p class="hint">请先选择产品库表</p>
       </div>
     </div>
 
-    <script src="./app.js"></script>
-  </body>
+    <div class="section">
+      <h3>步骤3：客户信息</h3>
+      <input type="text" id="customerName" placeholder="请输入客户名称" class="input-box" />
+    </div>
+
+    <div class="section">
+      <button id="generateQuote" class="btn-primary">🎯 生成报价单</button>
+    </div>
+
+    <div id="message" class="message"></div>
+  </div>
+
+  <script type="module" src="/src/index.ts"></script>
+</body>
 </html>
 
