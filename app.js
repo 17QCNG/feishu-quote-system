@@ -806,6 +806,7 @@
     var mvSupplier = document.getElementById("mainVisualSupplier");
     var mvSize = document.getElementById("mainVisualSize");
     var mvQty = document.getElementById("mainVisualQty");
+    var mvQtyUnit = document.getElementById("mainVisualQtyUnit");
     var mvAdd = document.getElementById("addMainVisual");
     var mvList = document.getElementById("mainVisualList");
 
@@ -850,14 +851,10 @@
 
     // === 单次操作临时暂存（sessionStorage）：已选产品 ===
     var DRAFT_KEY = "quote_selected_draft_v1";
-
-    // selected: templateKey -> picked item（可导出）
     var selected = new Map();
 
-    // === 单次操作临时暂存（sessionStorage）：待选库草稿（未勾选前的供应商/数量） ===
+    // === 单次操作临时暂存（sessionStorage）：待选库预设（未勾选前的供应商/数量） ===
     var POOL_DRAFT_KEY = "quote_pool_draft_v1";
-
-    // poolDraft: templateKey -> { qty:number, supplierTouched:boolean, supplierIndex?:number }
     var poolDraft = new Map();
 
     function persistPoolDraft() {
@@ -892,7 +889,7 @@
           var x = arr[i];
           if (!x || !x.key) continue;
 
-          // 保险起见：主视觉喷绘不走产品池
+          // 主视觉喷绘不走产品池
           if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
 
           var d = {
@@ -921,19 +918,17 @@
       persistPoolDraft();
     }
 
-    function syncPoolDraftFromPicked(templateKey, picked) {
-      if (!picked) return;
+    function resetPoolDraftAndPersist(templateKey) {
+      if (!templateKey) return;
+      poolDraft.delete(templateKey);
+      persistPoolDraft();
+    }
 
-      var d = poolDraft.get(templateKey) || { qty: 1, supplierTouched: false };
-      d.qty = Math.max(1, Number(picked.qty) || 1);
-
-      // 只有“手动选过供应商”的已选项，才把供应商写回草稿（否则继续走默认跟随逻辑）
-      if (picked.__supplierManual) {
-        d.supplierTouched = true;
-        d.supplierIndex = Math.max(0, Number(picked.__optIndex) || 0);
-      }
-
-      poolDraft.set(templateKey, d);
+    function clearPoolDraftForSelectedAndPersist() {
+      // 清空“已选产品”的预设（因为需求：取消勾选/清空时重置预设）
+      selected.forEach(function (_, key) {
+        poolDraft.delete(key);
+      });
       persistPoolDraft();
     }
 
@@ -964,7 +959,7 @@
           var x = arr[i];
           if (!x || !x.key) continue;
 
-          // 需求5：确保“主视觉喷绘”不会出现在已选/待选（它只通过主视觉模块添加）
+          // 主视觉喷绘不走产品池
           if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
 
           selected.set(String(x.key), {
@@ -991,17 +986,20 @@
     function setSelected(templateKey, item) {
       selected.set(templateKey, item);
       persistSelectedDraft();
-
-      // 让“待选库预设”与已选保持一致（取消勾选回待选库也能保留数量/手动供应商）
-      syncPoolDraftFromPicked(templateKey, item);
     }
 
     function deleteSelected(templateKey) {
       selected.delete(templateKey);
       persistSelectedDraft();
+
+      // 需求：取消勾选移除后，待选库预设要重置
+      resetPoolDraftAndPersist(templateKey);
     }
 
     function clearSelected() {
+      // 需求：清空已选后，待选库预设也重置
+      clearPoolDraftForSelectedAndPersist();
+
       selected.clear();
       persistSelectedDraft();
     }
@@ -1010,6 +1008,18 @@
     var mainVisualItems = []; // { supplier, size, qty }
     var mainVisualPriceBook = null; // Map supplier -> { cost, price, unit, desc, sourceTableName }
     var mainVisualDefaultSupplier = "";
+
+    function updateMainVisualQtyUnit() {
+      if (!mvQtyUnit) return;
+
+      var unitText = "平方";
+      if (mainVisualPriceBook && mvSupplier) {
+        var sup = mvSupplier.value || "默认供应商";
+        var pb = mainVisualPriceBook.get(sup);
+        if (pb && pb.unit) unitText = String(pb.unit);
+      }
+      mvQtyUnit.textContent = unitText;
+    }
 
     function getDefaultSupplierForMajor(major) {
       if (!isFollowMajor(major)) return "";
@@ -1037,21 +1047,14 @@
       if (target === "默认供应商") {
         for (var k = 0; k < tplRef.options.length; k++) {
           var opt3 = tplRef.options[k];
-          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : ""))
-            return k;
+          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : "")) return k;
         }
       }
 
       return 0;
     }
 
-    function applyPick(
-      templateKey,
-      tplRef,
-      supplierIndex,
-      qtyValue,
-      supplierManualFlag
-    ) {
+    function applyPick(templateKey, tplRef, supplierIndex, qtyValue, supplierManualFlag) {
       var idx = Math.max(0, Number(supplierIndex) || 0);
       var opt2 =
         (tplRef && tplRef.options && tplRef.options[idx]) ||
@@ -1099,7 +1102,7 @@
     var metasParsed = [];
     var majorIndex = new Map(); // major -> { major, metas: [...], suppliers:Set() }
 
-    // === 全量产品模板（需求6：搜索全量；需求3：已选不受大类影响） ===
+    // === 全量产品模板 ===
     var allTemplates = [];
     var allTemplatesMap = new Map(); // templateKey -> template
 
@@ -1167,8 +1170,7 @@
       "其他",
     ];
     var typeOrderMap = {};
-    for (var oi = 0; oi < typeOrder.length; oi++)
-      typeOrderMap[typeOrder[oi]] = oi;
+    for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
 
     function majorSort(a, b) {
       var ai = typeOrderMap[a];
@@ -1417,6 +1419,8 @@
         mainVisualPriceBook = null;
       }
 
+      updateMainVisualQtyUnit();
+
       allTemplates = buildProductTemplates(allItems);
       rebuildAllTemplatesMap();
 
@@ -1465,6 +1469,9 @@
         return;
       }
 
+      var unitText = mvQtyUnit ? mvQtyUnit.textContent : "";
+      if (!unitText) unitText = "平方";
+
       var html = "";
       for (var i = 0; i < mainVisualItems.length; i++) {
         var it = mainVisualItems[i];
@@ -1476,6 +1483,7 @@
           escapeHtml(it.size) +
           "｜数量：" +
           escapeHtml(it.qty) +
+          (unitText ? " " + escapeHtml(unitText) : "") +
           "</div>" +
           '<button data-mv-del="' +
           i +
@@ -1529,12 +1537,13 @@
         }
       }
       mainVisualDefaultSupplier = mvSupplier.value || "";
+      updateMainVisualQtyUnit();
     }
 
     function computePoolScopeTemplates() {
       var tokens = splitTokens(productSearchQuery);
 
-      // 需求6：搜索时直接用全量库
+      // 搜索时直接用全量库
       if (tokens.length > 0) return allTemplates.slice();
 
       // 未搜索时按大类过滤
@@ -1580,7 +1589,6 @@
 
       var items = [];
       selected.forEach(function (picked, key) {
-        // 需求5：保险起见
         if (String(key).indexOf("主视觉喷绘||") === 0) return;
 
         var tpl = allTemplatesMap.get(key) || null;
@@ -1590,8 +1598,7 @@
           "其他";
 
         var name = (tpl && tpl.name) || (picked && picked.name) || "";
-        var sizeDays =
-          (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
+        var sizeDays = (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
         var unit = (tpl && tpl.unit) || (picked && picked.unit) || "";
 
         if (tokens.length > 0) {
@@ -1763,6 +1770,15 @@
               qty.step = "1";
               qty.value = String(picked && picked.qty ? picked.qty : 1);
 
+              var qtyWrap = document.createElement("div");
+              qtyWrap.className = "qtywrap";
+              qtyWrap.appendChild(qty);
+
+              var unitSpan = document.createElement("span");
+              unitSpan.className = "unit";
+              unitSpan.textContent = item.unit ? String(item.unit) : "";
+              qtyWrap.appendChild(unitSpan);
+
               cb.addEventListener("change", function () {
                 if (!this.checked) {
                   deleteSelected(key);
@@ -1790,7 +1806,7 @@
               row.appendChild(cb);
               row.appendChild(mid);
               row.appendChild(supplierSel);
-              row.appendChild(qty);
+              row.appendChild(qtyWrap);
               body.appendChild(row);
             })();
           }
@@ -1802,7 +1818,7 @@
       }
     }
 
-    // ✅ 已改：待选库始终开放供应商/数量，并用 sessionStorage 暂存 poolDraft（重渲染不丢）
+    // ✅ 待选库：始终开放供应商/数量，且支持预设暂存（重渲染不丢）
     function renderPoolList() {
       var scope = computePoolScopeTemplates();
       var tokens = splitTokens(productSearchQuery);
@@ -1866,7 +1882,6 @@
                 "</div>"
               : "");
 
-          // 供应商：始终可选
           var supplierSel = document.createElement("select");
           supplierSel.className = "select";
           supplierSel.disabled = false;
@@ -1879,7 +1894,6 @@
             supplierSel.appendChild(o);
           }
 
-          // 数量：始终可填
           var qty = document.createElement("input");
           qty.className = "qty";
           qty.type = "number";
@@ -1887,7 +1901,16 @@
           qty.step = "1";
           qty.disabled = false;
 
-          // 初始化显示：优先使用草稿，否则用默认供应商/数量=1
+          var qtyWrap = document.createElement("div");
+          qtyWrap.className = "qtywrap";
+          qtyWrap.appendChild(qty);
+
+          var unitSpan = document.createElement("span");
+          unitSpan.className = "unit";
+          unitSpan.textContent = tpl.unit ? String(tpl.unit) : "";
+          qtyWrap.appendChild(unitSpan);
+
+          // 初始化显示：优先用草稿，否则用默认供应商/数量=1
           var defaultSup = getDefaultSupplierForMajor(tpl.major);
           var defaultIdx = defaultSup
             ? findOptionIndexBySupplier(tpl, defaultSup)
@@ -1912,12 +1935,11 @@
           qty.value = String(draft && draft.qty ? draft.qty : 1);
 
           supplierSel.addEventListener("change", function () {
-            // 未勾选前也允许选择供应商：写入草稿并标记为“手动选择”
+            // 手动选过供应商：标记 touched
             upsertPoolDraftSupplier(tpl.key, supplierSel.value);
           });
 
           qty.addEventListener("input", function () {
-            // 未勾选前也允许输入数量：写入草稿
             upsertPoolDraftQty(tpl.key, qty.value);
           });
 
@@ -1929,7 +1951,7 @@
             var idxToUse = Number(supplierSel.value) || 0;
             var qtyToUse = qty.value;
 
-            // 如果用户没有手动选供应商，则仍然遵循“默认供应商跟随逻辑”（主视觉供应商）
+            // 未手动选供应商时，仍遵循默认跟随逻辑（主视觉供应商）
             if (!d || !d.supplierTouched) {
               var defSup2 = getDefaultSupplierForMajor(tpl.major);
               if (defSup2) {
@@ -1946,14 +1968,16 @@
               !!(d && d.supplierTouched)
             );
 
-            // 勾选后从待选库隐藏；不自动切换 tab，只重渲染
+            // 勾选后该产品从待选库隐藏；同时把它的“待选库预设”清掉（后续移除时也会重置）
+            resetPoolDraftAndPersist(tpl.key);
+
             renderProducts();
           });
 
           row.appendChild(cb);
           row.appendChild(mid);
           row.appendChild(supplierSel);
-          row.appendChild(qty);
+          row.appendChild(qtyWrap);
           productList.appendChild(row);
         })();
       }
@@ -2010,7 +2034,6 @@
     }
 
     // === 事件绑定 ===
-
     majorDropdownBtn.addEventListener("click", function (e) {
       e.preventDefault();
       toggleMajorDropdown();
@@ -2047,6 +2070,7 @@
         mvBox.style.display = this.checked ? "block" : "none";
         if (this.checked) {
           refillMainVisualSuppliers();
+          updateMainVisualQtyUnit();
           renderMainVisualList();
           syncAutoSuppliersFromMainVisual(allTemplatesMap);
           renderProducts();
@@ -2057,6 +2081,7 @@
     if (mvSupplier) {
       mvSupplier.addEventListener("change", function () {
         mainVisualDefaultSupplier = mvSupplier.value || "";
+        updateMainVisualQtyUnit();
         syncAutoSuppliersFromMainVisual(allTemplatesMap);
         renderProducts();
       });
@@ -2122,7 +2147,6 @@
       });
     }
 
-    // 产品添加板块：全选当前列表 / 清空已选
     if (selectAllVisibleProductsBtn) {
       selectAllVisibleProductsBtn.addEventListener("click", function () {
         clearMsg();
@@ -2147,6 +2171,9 @@
           if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
 
           applyPick(tpl.key, tpl, idx, 1, false);
+          // 全选行为也重置预设
+          resetPoolDraftAndPersist(tpl.key);
+
           added++;
         }
 
@@ -2235,7 +2262,10 @@
 
         exportXlsx(arr, qn)
           .then(function () {
-            setMsg("已导出 XLSX（含公式/列宽/换行/行高/分组/小计/含税合计）。", "ok");
+            setMsg(
+              "已导出 XLSX（含公式/列宽/换行/行高/分组/小计/含税合计）。",
+              "ok"
+            );
           })
           .catch(function (e) {
             setMsg(
@@ -2249,8 +2279,9 @@
     // === 首次渲染 ===
     renderMajorDropdownOptions();
     refillMainVisualSuppliers();
+    updateMainVisualQtyUnit();
 
-    // 恢复已选（不依赖大类）
+    // 恢复已选 + 恢复待选预设
     var draftArr = restoreSelectedDraft();
     restorePoolDraft();
 
@@ -2260,7 +2291,7 @@
       setProductViewMode("pool");
     }
 
-    // 启动即加载全量产品库（满足需求6/3）
+    // 启动即加载全量产品库
     reloadAllProducts().catch(function (e) {
       setMsg(
         "初始化加载产品失败：" + (e && e.message ? e.message : String(e)),
