@@ -106,7 +106,7 @@
         border: 1px solid var(--line);
         border-radius: 10px;
         padding: 10px;
-        max-height: 380px;
+        max-height: 420px;
         overflow: auto;
         background: #fff;
       }
@@ -154,17 +154,6 @@
         box-sizing: border-box;
       }
 
-      .major-select {
-        width: 100%;
-        min-height: 210px;
-        padding: 8px 10px;
-        border-radius: 10px;
-        border: 1px solid var(--line);
-        background: #fff;
-        font-size: 13px;
-        box-sizing: border-box;
-      }
-
       .input {
         width: 100%;
         padding: 10px 12px;
@@ -172,6 +161,7 @@
         border: 1px solid var(--line);
         box-sizing: border-box;
         font-size: 13px;
+        background: #fff;
       }
 
       .hl {
@@ -221,6 +211,111 @@
         border: 1px solid rgba(245, 63, 63, 0.25);
       }
 
+      /* ====== 新：产品大类下拉多选 ====== */
+      .major-dropdown {
+        position: relative;
+        width: 100%;
+      }
+
+      .major-btn {
+        width: 100%;
+        text-align: left;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .major-btn .major-btn-text {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .major-btn .major-btn-arrow {
+        font-size: 12px;
+        color: var(--muted);
+        flex: 0 0 auto;
+      }
+
+      .major-panel {
+        position: absolute;
+        z-index: 50;
+        left: 0;
+        right: 0;
+        top: calc(100% + 6px);
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(31, 35, 41, 0.12);
+        padding: 8px;
+        max-height: 320px;
+        overflow: auto;
+        display: none;
+      }
+
+      .major-item {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 10px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+
+      .major-item:hover {
+        background: #f7f8fa;
+      }
+
+      .major-item input[type="checkbox"] {
+        margin-top: 2px;
+      }
+
+      .major-item .major-label {
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .major-item .major-sup {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      /* ====== 新：已选产品分组颜色 ====== */
+      .group-block {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
+
+      .group-header {
+        padding: 10px 12px;
+        background: color-mix(in srgb, var(--gcolor) 14%, #ffffff);
+        border-left: 8px solid var(--gcolor);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .group-title {
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .group-sub {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .group-body .prow {
+        border-left: 8px solid color-mix(in srgb, var(--gcolor) 40%, #ffffff);
+      }
+
       @media (max-width: 520px) {
         .prow {
           grid-template-columns: 20px 1fr;
@@ -229,9 +324,6 @@
         .prow .qty {
           grid-column: 2 / 3;
           width: 100%;
-        }
-        .major-select {
-          min-height: 240px;
         }
       }
     </style>
@@ -311,10 +403,16 @@
           </button>
         </div>
 
-        <select id="majorSelect" class="major-select" multiple></select>
+        <div id="majorDropdown" class="major-dropdown" style="margin-top: 8px">
+          <button id="majorDropdownBtn" class="input major-btn" type="button">
+            <span class="major-btn-text">请选择产品大类</span>
+            <span class="major-btn-arrow">▼</span>
+          </button>
+          <div id="majorDropdownPanel" class="major-panel"></div>
+        </div>
 
         <div class="hint">
-          支持多选（PC 可按住 Ctrl/Command，移动端可点选多个条目）。<br />
+          未搜索时，“待选库”会按你勾选的大类显示；当你在搜索框输入关键字时，会从<strong>全部产品</strong>中搜索（不受大类限制）。<br />
           输出列固定为：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
           同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
         </div>
@@ -346,7 +444,7 @@
         </div>
 
         <div id="productList" class="products" style="margin-top: 8px">
-          <div class="hint">请先在步骤1选择至少一个产品大类</div>
+          <div class="hint">正在初始化...</div>
         </div>
       </div>
 
