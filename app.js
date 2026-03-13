@@ -270,6 +270,7 @@
     return sup ? sup : "默认供应商";
   }
 
+  // 保留旧函数（不再作为“跟随主视觉”的限定条件）
   function isFollowMajor(major) {
     var m = normalizeName(major);
     return m === "物料搭建" || m === "印刷制作";
@@ -569,6 +570,7 @@
       selectedArr = selected.slice();
     }
 
+    // 需求2：同一大类内排序改为“先选择的在前”（__pickSeq 越小越靠前）
     selectedArr.sort(function (a, b) {
       var at = canonicalType(a && a.sourceTableName ? a.sourceTableName : "");
       var bt = canonicalType(b && b.sourceTableName ? b.sourceTableName : "");
@@ -581,6 +583,13 @@
         : typeOrderMap["其他"];
       if (ai !== bi) return ai - bi;
 
+      var as = a && typeof a.__pickSeq === "number" ? a.__pickSeq : 0;
+      var bs = b && typeof b.__pickSeq === "number" ? b.__pickSeq : 0;
+      if (as && bs && as !== bs) return as - bs;
+      if (as && !bs) return -1;
+      if (!as && bs) return 1;
+
+      // 兜底：保持原来的稳定排序（名称/编号）
       var an = normalizeName(a && a.name ? a.name : "");
       var bn = normalizeName(b && b.name ? b.name : "");
       if (an !== bn) return an.localeCompare(bn, "zh");
@@ -853,6 +862,21 @@
     var DRAFT_KEY = "quote_selected_draft_v1";
     var selected = new Map();
 
+    // 需求2：记录选择顺序（同一大类内按先选先排）
+    var pickSeqCounter = 0;
+    function nextPickSeq() {
+      pickSeqCounter++;
+      return pickSeqCounter;
+    }
+    function bumpPickSeqCounterFromSelected() {
+      var max = 0;
+      selected.forEach(function (v) {
+        var s = v && typeof v.__pickSeq === "number" ? v.__pickSeq : 0;
+        if (s > max) max = s;
+      });
+      pickSeqCounter = Math.max(pickSeqCounter, max);
+    }
+
     // === 单次操作临时暂存（sessionStorage）：待选库预设（未勾选前的供应商/数量） ===
     var POOL_DRAFT_KEY = "quote_pool_draft_v1";
     var poolDraft = new Map();
@@ -868,8 +892,13 @@
         // 只存“有意义”的草稿，避免 sessionStorage 过大
         if (qty === 1 && !supplierTouched) return;
 
-        var out = { key: String(key), qty: qty, supplierTouched: supplierTouched };
-        if (supplierTouched) out.supplierIndex = Math.max(0, Number(v.supplierIndex) || 0);
+        var out = {
+          key: String(key),
+          qty: qty,
+          supplierTouched: supplierTouched,
+        };
+        if (supplierTouched)
+          out.supplierIndex = Math.max(0, Number(v.supplierIndex) || 0);
         arr.push(out);
       });
 
@@ -896,7 +925,8 @@
             qty: Math.max(1, Number(x.qty) || 1),
             supplierTouched: !!x.supplierTouched,
           };
-          if (d.supplierTouched) d.supplierIndex = Math.max(0, Number(x.supplierIndex) || 0);
+          if (d.supplierTouched)
+            d.supplierIndex = Math.max(0, Number(x.supplierIndex) || 0);
 
           poolDraft.set(String(x.key), d);
         }
@@ -941,6 +971,7 @@
           supplier: v && v.supplier ? String(v.supplier) : "",
           __optIndex: v && typeof v.__optIndex === "number" ? v.__optIndex : 0,
           __supplierManual: !!(v && v.__supplierManual),
+          __pickSeq: v && typeof v.__pickSeq === "number" ? v.__pickSeq : 0,
         });
       });
       if (arr.length === 0) safeSessionRemove(DRAFT_KEY);
@@ -962,6 +993,11 @@
           // 主视觉喷绘不走产品池
           if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
 
+          var seq =
+            typeof x.__pickSeq === "number" && isFinite(x.__pickSeq) && x.__pickSeq > 0
+              ? x.__pickSeq
+              : i + 1; // 兼容旧草稿（没有 seq 时按存储顺序补齐）
+
           selected.set(String(x.key), {
             name: "",
             sizeDays: "",
@@ -974,9 +1010,12 @@
             supplier: x.supplier || "",
             __optIndex: Math.max(0, Number(x.__optIndex) || 0),
             __supplierManual: !!x.__supplierManual,
+            __pickSeq: seq,
             __placeholder: true,
           });
         }
+
+        bumpPickSeqCounterFromSelected();
         return arr;
       } catch (e) {
         return [];
@@ -1001,6 +1040,7 @@
       clearPoolDraftForSelectedAndPersist();
 
       selected.clear();
+      pickSeqCounter = 0;
       persistSelectedDraft();
     }
 
@@ -1021,16 +1061,12 @@
       mvQtyUnit.textContent = unitText;
     }
 
-    function getDefaultSupplierForMajor(major) {
-      if (!isFollowMajor(major)) return "";
-      return normalizeName(mainVisualDefaultSupplier || "");
-    }
-
-    function findOptionIndexBySupplier(tplRef, supplierName) {
-      if (!tplRef || !tplRef.options || tplRef.options.length === 0) return 0;
+    // --- 新规则：只要某产品“存在与主视觉相同的供应商选项”，就跟随主视觉供应商 ---
+    function findOptionIndexBySupplierStrict(tplRef, supplierName) {
+      if (!tplRef || !tplRef.options || tplRef.options.length === 0) return -1;
 
       var target = normalizeName(supplierName);
-      if (!target) return 0;
+      if (!target) return -1;
 
       for (var i = 0; i < tplRef.options.length; i++) {
         var opt = tplRef.options[i];
@@ -1047,19 +1083,48 @@
       if (target === "默认供应商") {
         for (var k = 0; k < tplRef.options.length; k++) {
           var opt3 = tplRef.options[k];
-          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : "")) return k;
+          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : ""))
+            return k;
         }
       }
 
-      return 0;
+      return -1;
     }
 
-    function applyPick(templateKey, tplRef, supplierIndex, qtyValue, supplierManualFlag) {
+    // 兼容旧调用：找不到时返回 0
+    function findOptionIndexBySupplier(tplRef, supplierName) {
+      var idx = findOptionIndexBySupplierStrict(tplRef, supplierName);
+      return idx >= 0 ? idx : 0;
+    }
+
+    function getFollowSupplierIndexForTemplate(tplRef) {
+      var defSup = normalizeName(mainVisualDefaultSupplier || "");
+      if (!defSup) return null;
+
+      var idx = findOptionIndexBySupplierStrict(tplRef, defSup);
+      if (idx < 0) return null;
+
+      return idx;
+    }
+
+    function applyPick(
+      templateKey,
+      tplRef,
+      supplierIndex,
+      qtyValue,
+      supplierManualFlag
+    ) {
       var idx = Math.max(0, Number(supplierIndex) || 0);
       var opt2 =
         (tplRef && tplRef.options && tplRef.options[idx]) ||
         (tplRef && tplRef.options ? tplRef.options[0] : null);
       if (!opt2) return;
+
+      var existed = selected.get(templateKey);
+      var seq =
+        existed && typeof existed.__pickSeq === "number" && existed.__pickSeq > 0
+          ? existed.__pickSeq
+          : nextPickSeq();
 
       var next = {
         name: tplRef.name,
@@ -1073,11 +1138,13 @@
         supplier: opt2.supplier || "",
         __optIndex: idx,
         __supplierManual: !!supplierManualFlag,
+        __pickSeq: seq,
       };
 
       setSelected(templateKey, next);
     }
 
+    // 需求1/3：主视觉供应商变更时，所有“未手动指定供应商且包含该供应商选项”的已选产品自动切换
     function syncAutoSuppliersFromMainVisual(allTemplatesMap) {
       var defSup = normalizeName(mainVisualDefaultSupplier || "");
       if (!defSup) return;
@@ -1089,11 +1156,10 @@
         var tpl = allTemplatesMap.get(key);
         if (!tpl) return;
 
-        var major = tpl.major || v.sourceTableName || "";
-        if (!isFollowMajor(major)) return;
+        var idxStrict = findOptionIndexBySupplierStrict(tpl, defSup);
+        if (idxStrict < 0) return; // 该产品不存在此供应商选项，不跟随
 
-        var idx = findOptionIndexBySupplier(tpl, defSup);
-        applyPick(key, tpl, idx, v.qty, false);
+        applyPick(key, tpl, idxStrict, v.qty, false);
       });
     }
 
@@ -1170,7 +1236,8 @@
       "其他",
     ];
     var typeOrderMap = {};
-    for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
+    for (var oi = 0; oi < typeOrder.length; oi++)
+      typeOrderMap[typeOrder[oi]] = oi;
 
     function majorSort(a, b) {
       var ai = typeOrderMap[a];
@@ -1424,7 +1491,7 @@
       allTemplates = buildProductTemplates(allItems);
       rebuildAllTemplatesMap();
 
-      // 用模板重算“占位已选”，并执行默认供应商跟随逻辑
+      // 用模板重算“占位已选”，并执行默认供应商跟随逻辑（新规则：只要该产品包含主视觉供应商选项就跟随）
       selected.forEach(function (ex, key) {
         var tpl = allTemplatesMap.get(key);
         if (!tpl) return;
@@ -1436,12 +1503,21 @@
           if (!tpl.options[idx])
             idx = findOptionIndexBySupplier(tpl, ex.supplier || "");
         } else {
-          var defSup = getDefaultSupplierForMajor(tpl.major);
-          if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
-          else if (ex.supplier) idx = findOptionIndexBySupplier(tpl, ex.supplier);
-          else if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
+          var followIdx = getFollowSupplierIndexForTemplate(tpl);
+          if (followIdx != null) {
+            idx = followIdx;
+          } else if (ex.supplier) {
+            var keepIdx = findOptionIndexBySupplierStrict(tpl, ex.supplier || "");
+            if (keepIdx >= 0) idx = keepIdx;
+            else idx = 0;
+          } else if (typeof ex.__optIndex === "number" && tpl.options[ex.__optIndex]) {
+            idx = ex.__optIndex;
+          } else {
+            idx = 0;
+          }
         }
 
+        // applyPick 会保留 __pickSeq（若已存在）
         applyPick(key, tpl, idx, ex.qty, !!ex.__supplierManual);
       });
 
@@ -1661,7 +1737,22 @@
           var mj = majors[gi];
           var arr = groups.get(mj) || [];
 
+          // 需求2：同一大类内按“选择先后”排序
           arr.sort(function (a, b) {
+            var as =
+              a.picked && typeof a.picked.__pickSeq === "number"
+                ? a.picked.__pickSeq
+                : 0;
+            var bs =
+              b.picked && typeof b.picked.__pickSeq === "number"
+                ? b.picked.__pickSeq
+                : 0;
+
+            if (as && bs && as !== bs) return as - bs;
+            if (as && !bs) return -1;
+            if (!as && bs) return 1;
+
+            // 兜底：名称/尺寸
             var an = normalizeName(a.name);
             var bn = normalizeName(b.name);
             if (an !== bn) return an.localeCompare(bn, "zh");
@@ -1752,10 +1843,9 @@
                   supplierSel.appendChild(o);
                 }
 
-                var defaultSup = getDefaultSupplierForMajor(tpl.major);
-                var defaultIdx = defaultSup
-                  ? findOptionIndexBySupplier(tpl, defaultSup)
-                  : 0;
+                // 新规则：如果该产品存在主视觉供应商选项，则默认显示主视觉供应商
+                var followIdx = getFollowSupplierIndexForTemplate(tpl);
+                var defaultIdx = followIdx != null ? followIdx : 0;
 
                 supplierSel.value =
                   picked && typeof picked.__optIndex === "number"
@@ -1910,11 +2000,9 @@
           unitSpan.textContent = tpl.unit ? String(tpl.unit) : "";
           qtyWrap.appendChild(unitSpan);
 
-          // 初始化显示：优先用草稿，否则用默认供应商/数量=1
-          var defaultSup = getDefaultSupplierForMajor(tpl.major);
-          var defaultIdx = defaultSup
-            ? findOptionIndexBySupplier(tpl, defaultSup)
-            : 0;
+          // 初始化显示：优先用草稿，否则如果该产品存在主视觉供应商选项就显示主视觉供应商，否则默认第一个
+          var followIdx0 = getFollowSupplierIndexForTemplate(tpl);
+          var defaultIdx = followIdx0 != null ? followIdx0 : 0;
 
           var draft = poolDraft.get(tpl.key) || null;
 
@@ -1951,22 +2039,16 @@
             var idxToUse = Number(supplierSel.value) || 0;
             var qtyToUse = qty.value;
 
-            // 未手动选供应商时，仍遵循默认跟随逻辑（主视觉供应商）
+            // 未手动选供应商时：如果该产品存在主视觉供应商选项，则强制跟随主视觉供应商
             if (!d || !d.supplierTouched) {
-              var defSup2 = getDefaultSupplierForMajor(tpl.major);
-              if (defSup2) {
-                idxToUse = findOptionIndexBySupplier(tpl, defSup2);
+              var followIdx = getFollowSupplierIndexForTemplate(tpl);
+              if (followIdx != null) {
+                idxToUse = followIdx;
                 supplierSel.value = String(idxToUse);
               }
             }
 
-            applyPick(
-              tpl.key,
-              tpl,
-              idxToUse,
-              qtyToUse,
-              !!(d && d.supplierTouched)
-            );
+            applyPick(tpl.key, tpl, idxToUse, qtyToUse, !!(d && d.supplierTouched));
 
             // 勾选后该产品从待选库隐藏；同时把它的“待选库预设”清掉（后续移除时也会重置）
             resetPoolDraftAndPersist(tpl.key);
@@ -2167,8 +2249,8 @@
           if (selected.has(tpl.key)) continue;
 
           var idx = 0;
-          var defSup = getDefaultSupplierForMajor(tpl.major);
-          if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
+          var followIdx = getFollowSupplierIndexForTemplate(tpl);
+          if (followIdx != null) idx = followIdx;
 
           applyPick(tpl.key, tpl, idx, 1, false);
           // 全选行为也重置预设
@@ -2238,6 +2320,9 @@
                 qty: Math.max(1, Number(mv.qty) || 1),
                 sourceTableName: pb.sourceTableName || "物料搭建",
                 supplier: sup,
+
+                // 让主视觉喷绘在同一大类内排在最后（不影响你的产品选择顺序）
+                __pickSeq: Number.MAX_SAFE_INTEGER - i,
               });
             }
 
