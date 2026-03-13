@@ -1,3 +1,4 @@
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="zh-CN">
   <head>
@@ -114,7 +115,7 @@
 
       .prow {
         display: grid;
-        grid-template-columns: 20px 1fr 88px;
+        grid-template-columns: 20px 1fr 150px 88px;
         gap: 10px;
         align-items: center;
         padding: 10px 8px;
@@ -142,6 +143,17 @@
         padding: 8px 10px;
         border-radius: 10px;
         border: 1px solid var(--line);
+        box-sizing: border-box;
+      }
+
+      .select {
+        width: 150px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 12px;
+        box-sizing: border-box;
       }
 
       .input {
@@ -151,6 +163,14 @@
         border: 1px solid var(--line);
         box-sizing: border-box;
         font-size: 13px;
+      }
+
+      .hl {
+        background: rgba(255, 235, 59, 0.35);
+        padding: 1px 6px;
+        border-radius: 8px;
+        font-weight: 700;
+        color: var(--text);
       }
 
       .btn {
@@ -191,6 +211,17 @@
         color: var(--err);
         border: 1px solid rgba(245, 63, 63, 0.25);
       }
+
+      @media (max-width: 520px) {
+        .prow {
+          grid-template-columns: 20px 1fr;
+        }
+        .prow .select,
+        .prow .qty {
+          grid-column: 2 / 3;
+          width: 100%;
+        }
+      }
     </style>
   </head>
 
@@ -212,12 +243,59 @@
       </div>
 
       <div class="section">
-        <h3>步骤1：选择产品库表（可多选）</h3>
+        <h3>主视觉喷绘</h3>
+
+        <div class="rowline" style="gap: 6px">
+          <input id="needMainVisual" type="checkbox" />
+          <div class="table-name">需要主视觉喷绘（可添加多次）</div>
+        </div>
+
+        <div id="mainVisualConfig" style="display: none; margin-top: 10px">
+          <div class="rowline">
+            <select id="mainVisualSupplier" class="select"></select>
+
+            <input
+              id="mainVisualSize"
+              class="input"
+              type="text"
+              placeholder="主视觉喷绘尺寸，例如：3m*5m"
+            />
+
+            <input
+              id="mainVisualQty"
+              class="qty"
+              type="number"
+              min="1"
+              step="1"
+              value="1"
+            />
+
+            <button id="addMainVisual" class="smallbtn" type="button">
+              确认添加
+            </button>
+          </div>
+
+          <div id="mainVisualList" class="hint" style="margin-top: 8px"></div>
+
+          <div class="hint">
+            每次添加会在报价表中作为一条独立“主视觉喷绘”产品输出；成本/单价匹配【物料搭建】中的“主视觉喷绘”（按供应商匹配）。
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>步骤1：选择产品大类（可多选）</h3>
 
         <div class="rowline">
-          <button id="selectAllTables" class="smallbtn" type="button">全选</button>
-          <button id="clearAllTables" class="smallbtn" type="button">全不选</button>
-          <button id="reloadProducts" class="smallbtn" type="button">重新加载产品</button>
+          <button id="selectAllTables" class="smallbtn" type="button">
+            全选
+          </button>
+          <button id="clearAllTables" class="smallbtn" type="button">
+            全不选
+          </button>
+          <button id="reloadProducts" class="smallbtn" type="button">
+            重新加载产品
+          </button>
         </div>
 
         <div id="tableList" class="tables">
@@ -226,18 +304,20 @@
 
         <div class="hint">
           输出列固定为：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
-          同一数据表（产品类型=数据表名）会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
+          同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
         </div>
       </div>
 
       <div class="section">
-        <h3>步骤2：选择产品</h3>
+        <h3>步骤2：选择产品（并选择供应商与数量）</h3>
         <div id="productList" class="products">
-          <div class="hint">请先在步骤1勾选至少一个数据表</div>
+          <div class="hint">请先在步骤1勾选至少一个产品大类</div>
         </div>
       </div>
 
-      <button id="exportXlsx" class="btn" type="button">📤 导出报价单 XLSX（带公式）</button>
+      <button id="exportXlsx" class="btn" type="button">
+        📤 导出报价单 XLSX（带公式）
+      </button>
 
       <div id="message" class="msg"></div>
     </div>
