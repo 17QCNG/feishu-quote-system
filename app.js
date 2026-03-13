@@ -446,12 +446,18 @@
       var an = normalizeName(a.name);
       var bn = normalizeName(b.name);
       if (an !== bn) return an.localeCompare(bn, "zh");
-      return normalizeName(a.sizeDays).localeCompare(normalizeName(b.sizeDays), "zh");
+      return normalizeName(a.sizeDays).localeCompare(
+        normalizeName(b.sizeDays),
+        "zh"
+      );
     });
 
     for (var j = 0; j < arr.length; j++) {
       arr[j].options.sort(function (x, y) {
-        return normalizeName(x.supplier).localeCompare(normalizeName(y.supplier), "zh");
+        return normalizeName(x.supplier).localeCompare(
+          normalizeName(y.supplier),
+          "zh"
+        );
       });
     }
 
@@ -542,7 +548,8 @@
       "其他",
     ];
     var typeOrderMap = {};
-    for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
+    for (var oi = 0; oi < typeOrder.length; oi++)
+      typeOrderMap[typeOrder[oi]] = oi;
 
     function canonicalType(rawType) {
       var t0 = normalizeName(rawType);
@@ -847,6 +854,89 @@
     // selected: templateKey -> picked item（可导出）
     var selected = new Map();
 
+    // === 单次操作临时暂存（sessionStorage）：待选库草稿（未勾选前的供应商/数量） ===
+    var POOL_DRAFT_KEY = "quote_pool_draft_v1";
+
+    // poolDraft: templateKey -> { qty:number, supplierTouched:boolean, supplierIndex?:number }
+    var poolDraft = new Map();
+
+    function persistPoolDraft() {
+      var arr = [];
+      poolDraft.forEach(function (v, key) {
+        if (!key || !v) return;
+
+        var qty = Math.max(1, Number(v.qty) || 1);
+        var supplierTouched = !!v.supplierTouched;
+
+        // 只存“有意义”的草稿，避免 sessionStorage 过大
+        if (qty === 1 && !supplierTouched) return;
+
+        var out = { key: String(key), qty: qty, supplierTouched: supplierTouched };
+        if (supplierTouched) out.supplierIndex = Math.max(0, Number(v.supplierIndex) || 0);
+        arr.push(out);
+      });
+
+      if (arr.length === 0) safeSessionRemove(POOL_DRAFT_KEY);
+      else safeSessionSet(POOL_DRAFT_KEY, JSON.stringify(arr));
+    }
+
+    function restorePoolDraft() {
+      var raw = safeSessionGet(POOL_DRAFT_KEY);
+      if (!raw) return;
+
+      try {
+        var arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return;
+
+        for (var i = 0; i < arr.length; i++) {
+          var x = arr[i];
+          if (!x || !x.key) continue;
+
+          // 保险起见：主视觉喷绘不走产品池
+          if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
+
+          var d = {
+            qty: Math.max(1, Number(x.qty) || 1),
+            supplierTouched: !!x.supplierTouched,
+          };
+          if (d.supplierTouched) d.supplierIndex = Math.max(0, Number(x.supplierIndex) || 0);
+
+          poolDraft.set(String(x.key), d);
+        }
+      } catch (e) {}
+    }
+
+    function upsertPoolDraftQty(templateKey, qtyValue) {
+      var d = poolDraft.get(templateKey) || { qty: 1, supplierTouched: false };
+      d.qty = Math.max(1, Number(qtyValue) || 1);
+      poolDraft.set(templateKey, d);
+      persistPoolDraft();
+    }
+
+    function upsertPoolDraftSupplier(templateKey, supplierIndex) {
+      var d = poolDraft.get(templateKey) || { qty: 1, supplierTouched: false };
+      d.supplierTouched = true;
+      d.supplierIndex = Math.max(0, Number(supplierIndex) || 0);
+      poolDraft.set(templateKey, d);
+      persistPoolDraft();
+    }
+
+    function syncPoolDraftFromPicked(templateKey, picked) {
+      if (!picked) return;
+
+      var d = poolDraft.get(templateKey) || { qty: 1, supplierTouched: false };
+      d.qty = Math.max(1, Number(picked.qty) || 1);
+
+      // 只有“手动选过供应商”的已选项，才把供应商写回草稿（否则继续走默认跟随逻辑）
+      if (picked.__supplierManual) {
+        d.supplierTouched = true;
+        d.supplierIndex = Math.max(0, Number(picked.__optIndex) || 0);
+      }
+
+      poolDraft.set(templateKey, d);
+      persistPoolDraft();
+    }
+
     function persistSelectedDraft() {
       var arr = [];
       selected.forEach(function (v, key) {
@@ -901,6 +991,9 @@
     function setSelected(templateKey, item) {
       selected.set(templateKey, item);
       persistSelectedDraft();
+
+      // 让“待选库预设”与已选保持一致（取消勾选回待选库也能保留数量/手动供应商）
+      syncPoolDraftFromPicked(templateKey, item);
     }
 
     function deleteSelected(templateKey) {
@@ -944,14 +1037,21 @@
       if (target === "默认供应商") {
         for (var k = 0; k < tplRef.options.length; k++) {
           var opt3 = tplRef.options[k];
-          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : "")) return k;
+          if (!normalizeName(opt3 && opt3.supplier ? opt3.supplier : ""))
+            return k;
         }
       }
 
       return 0;
     }
 
-    function applyPick(templateKey, tplRef, supplierIndex, qtyValue, supplierManualFlag) {
+    function applyPick(
+      templateKey,
+      tplRef,
+      supplierIndex,
+      qtyValue,
+      supplierManualFlag
+    ) {
       var idx = Math.max(0, Number(supplierIndex) || 0);
       var opt2 =
         (tplRef && tplRef.options && tplRef.options[idx]) ||
@@ -1067,12 +1167,14 @@
       "其他",
     ];
     var typeOrderMap = {};
-    for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
+    for (var oi = 0; oi < typeOrder.length; oi++)
+      typeOrderMap[typeOrder[oi]] = oi;
 
     function majorSort(a, b) {
       var ai = typeOrderMap[a];
       var bi = typeOrderMap[b];
-      if (ai == null && bi == null) return String(a).localeCompare(String(b), "zh");
+      if (ai == null && bi == null)
+        return String(a).localeCompare(String(b), "zh");
       if (ai == null) return 1;
       if (bi == null) return -1;
       return ai - bi;
@@ -1112,7 +1214,8 @@
         var supText = "";
         if (supplierArr.length > 0) {
           var preview = supplierArr.slice(0, 3).join("、");
-          supText = "供应商：" + preview + (supplierArr.length > 3 ? "等" : "");
+          supText =
+            "供应商：" + preview + (supplierArr.length > 3 ? "等" : "");
         }
 
         var item = document.createElement("div");
@@ -1127,7 +1230,9 @@
           '<div class="major-label">' +
           escapeHtml(major) +
           "</div>" +
-          (supText ? '<div class="major-sup">' + escapeHtml(supText) + "</div>" : "");
+          (supText
+            ? '<div class="major-sup">' + escapeHtml(supText) + "</div>"
+            : "");
 
         item.appendChild(cb);
         item.appendChild(box);
@@ -1172,7 +1277,8 @@
         if (majors.length > 0) {
           var majorSet = new Set(majors);
           for (var i = 0; i < allTemplates.length; i++) {
-            if (majorSet.has(allTemplates[i].major)) poolScope.push(allTemplates[i]);
+            if (majorSet.has(allTemplates[i].major))
+              poolScope.push(allTemplates[i]);
           }
         }
       }
@@ -1261,7 +1367,10 @@
       var results = await runWithConcurrency(
         metasParsed,
         async function (meta) {
-          var items = await loadProductsFromTable({ id: meta.id, name: meta.name });
+          var items = await loadProductsFromTable({
+            id: meta.id,
+            name: meta.name,
+          });
           return { meta: meta, items: items };
         },
         4
@@ -1320,7 +1429,8 @@
 
         if (ex.__supplierManual) {
           if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
-          if (!tpl.options[idx]) idx = findOptionIndexBySupplier(tpl, ex.supplier || "");
+          if (!tpl.options[idx])
+            idx = findOptionIndexBySupplier(tpl, ex.supplier || "");
         } else {
           var defSup = getDefaultSupplierForMajor(tpl.major);
           if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
@@ -1335,7 +1445,8 @@
 
       renderProducts();
 
-      if (warnings.length > 0) setMsg("部分表无法加载：\n" + warnings.join("\n"), "err");
+      if (warnings.length > 0)
+        setMsg("部分表无法加载：\n" + warnings.join("\n"), "err");
       else setMsg("产品库加载完成（全量）。", "ok");
     }
 
@@ -1479,7 +1590,8 @@
           "其他";
 
         var name = (tpl && tpl.name) || (picked && picked.name) || "";
-        var sizeDays = (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
+        var sizeDays =
+          (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
         var unit = (tpl && tpl.unit) || (picked && picked.unit) || "";
 
         if (tokens.length > 0) {
@@ -1515,7 +1627,8 @@
       });
 
       if (!items || items.length === 0) {
-        productList.innerHTML = '<div class="hint">当前没有已选产品（或搜索无匹配）。</div>';
+        productList.innerHTML =
+          '<div class="hint">当前没有已选产品（或搜索无匹配）。</div>';
         return;
       }
 
@@ -1545,7 +1658,10 @@
             var an = normalizeName(a.name);
             var bn = normalizeName(b.name);
             if (an !== bn) return an.localeCompare(bn, "zh");
-            return normalizeName(a.sizeDays).localeCompare(normalizeName(b.sizeDays), "zh");
+            return normalizeName(a.sizeDays).localeCompare(
+              normalizeName(b.sizeDays),
+              "zh"
+            );
           });
 
           var block = document.createElement("div");
@@ -1616,7 +1732,8 @@
                 supplierSel.disabled = true;
                 var oo = document.createElement("option");
                 oo.value = "0";
-                oo.textContent = picked && picked.supplier ? picked.supplier : "默认供应商";
+                oo.textContent =
+                  picked && picked.supplier ? picked.supplier : "默认供应商";
                 supplierSel.appendChild(oo);
               } else {
                 supplierSel.disabled = false;
@@ -1629,7 +1746,9 @@
                 }
 
                 var defaultSup = getDefaultSupplierForMajor(tpl.major);
-                var defaultIdx = defaultSup ? findOptionIndexBySupplier(tpl, defaultSup) : 0;
+                var defaultIdx = defaultSup
+                  ? findOptionIndexBySupplier(tpl, defaultSup)
+                  : 0;
 
                 supplierSel.value =
                   picked && typeof picked.__optIndex === "number"
@@ -1683,6 +1802,7 @@
       }
     }
 
+    // ✅ 已改：待选库始终开放供应商/数量，并用 sessionStorage 暂存 poolDraft（重渲染不丢）
     function renderPoolList() {
       var scope = computePoolScopeTemplates();
       var tokens = splitTokens(productSearchQuery);
@@ -1746,9 +1866,10 @@
                 "</div>"
               : "");
 
+          // 供应商：始终可选
           var supplierSel = document.createElement("select");
           supplierSel.className = "select";
-          supplierSel.disabled = true;
+          supplierSel.disabled = false;
 
           for (var oi = 0; oi < tpl.options.length; oi++) {
             var opt = tpl.options[oi];
@@ -1758,51 +1879,75 @@
             supplierSel.appendChild(o);
           }
 
-          var defaultSup = getDefaultSupplierForMajor(tpl.major);
-          var defaultIdx = defaultSup ? findOptionIndexBySupplier(tpl, defaultSup) : 0;
-          supplierSel.value = String(defaultIdx);
-
+          // 数量：始终可填
           var qty = document.createElement("input");
           qty.className = "qty";
           qty.type = "number";
           qty.min = "1";
           qty.step = "1";
-          qty.value = "1";
-          qty.disabled = true;
+          qty.disabled = false;
+
+          // 初始化显示：优先使用草稿，否则用默认供应商/数量=1
+          var defaultSup = getDefaultSupplierForMajor(tpl.major);
+          var defaultIdx = defaultSup
+            ? findOptionIndexBySupplier(tpl, defaultSup)
+            : 0;
+
+          var draft = poolDraft.get(tpl.key) || null;
+
+          var idxToShow = defaultIdx;
+          if (
+            draft &&
+            draft.supplierTouched &&
+            typeof draft.supplierIndex === "number" &&
+            isFinite(draft.supplierIndex)
+          ) {
+            idxToShow = Math.max(
+              0,
+              Math.min(tpl.options.length - 1, draft.supplierIndex)
+            );
+          }
+          supplierSel.value = String(idxToShow);
+
+          qty.value = String(draft && draft.qty ? draft.qty : 1);
+
+          supplierSel.addEventListener("change", function () {
+            // 未勾选前也允许选择供应商：写入草稿并标记为“手动选择”
+            upsertPoolDraftSupplier(tpl.key, supplierSel.value);
+          });
+
+          qty.addEventListener("input", function () {
+            // 未勾选前也允许输入数量：写入草稿
+            upsertPoolDraftQty(tpl.key, qty.value);
+          });
 
           cb.addEventListener("change", function () {
-            if (this.checked) {
-              qty.disabled = false;
-              supplierSel.disabled = false;
+            if (!this.checked) return;
 
-              var idxToUse = Number(supplierSel.value) || 0;
+            var d = poolDraft.get(tpl.key) || null;
+
+            var idxToUse = Number(supplierSel.value) || 0;
+            var qtyToUse = qty.value;
+
+            // 如果用户没有手动选供应商，则仍然遵循“默认供应商跟随逻辑”（主视觉供应商）
+            if (!d || !d.supplierTouched) {
               var defSup2 = getDefaultSupplierForMajor(tpl.major);
               if (defSup2) {
                 idxToUse = findOptionIndexBySupplier(tpl, defSup2);
                 supplierSel.value = String(idxToUse);
               }
-
-              applyPick(tpl.key, tpl, idxToUse, qty.value, false);
-
-              // 需求2：不再自动跳转“已选产品”
-              renderProducts();
-            } else {
-              renderProducts();
             }
-          });
 
-          supplierSel.addEventListener("change", function () {
-            var it2 = selected.get(tpl.key);
-            if (!it2) return;
-            applyPick(tpl.key, tpl, supplierSel.value, qty.value, true);
+            applyPick(
+              tpl.key,
+              tpl,
+              idxToUse,
+              qtyToUse,
+              !!(d && d.supplierTouched)
+            );
+
+            // 勾选后从待选库隐藏；不自动切换 tab，只重渲染
             renderProducts();
-          });
-
-          qty.addEventListener("input", function () {
-            var it3 = selected.get(tpl.key);
-            if (!it3) return;
-            it3.qty = Math.max(1, Number(qty.value) || 1);
-            setSelected(tpl.key, it3);
           });
 
           row.appendChild(cb);
@@ -2107,6 +2252,8 @@
 
     // 恢复已选（不依赖大类）
     var draftArr = restoreSelectedDraft();
+    restorePoolDraft();
+
     if (draftArr && draftArr.length > 0) {
       setProductViewMode("selected");
     } else {
