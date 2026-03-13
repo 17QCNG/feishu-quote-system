@@ -305,8 +305,8 @@
     headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     headerRow.height = 20;
 
-    // 需求6：填充 2 到 2I（A2:I2）底色为 FFFF00
-    for (var hc = 1; hc <= 9; hc++) {
+    // 需求6：填充 2 到 2I（H2:I2）底色为 FFFF00
+    for (var hc = 8; hc <= 9; hc++) {
       ws.getCell(2, hc).fill = {
         type: "pattern",
         pattern: "solid",
