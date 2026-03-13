@@ -198,7 +198,7 @@
     var units = 0;
     for (var i = 0; i < str.length; i++) {
       var ch = str.charAt(i);
-      if (/[\u2E80-\u9FFF\uF900-\uFAFF]/.test(ch)) units += 2; // CJK 及部首等
+      if (/[\u2E80-\u9FFF\uF900-\uFAFF]/.test(ch)) units += 2;
       else units += 1;
     }
     return units;
@@ -254,19 +254,19 @@
       properties: { defaultRowHeight: 20 },
     });
 
-    // 固定列（需求1/2/3）：删除产品类型/产品编号，最左侧新增“科目”
-    // A..J：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价、单价、总价、产品描述
+    // 需求1/2/3：导出列=10列（A..J）
+    // A 科目（组内序号），B 产品名称，C 尺寸/天数，D 数量，E 单位，F 成本单价，G 成本总价(公式)，H 单价，I 总价(公式)，J 产品描述
     var headers = [
-      "科目", // A
-      "产品名称", // B
-      "尺寸/天数", // C
-      "数量", // D
-      "单位", // E
-      "成本单价", // F
-      "成本总价", // G (公式)
-      "单价", // H
-      "总价", // I (公式)
-      "产品描述", // J
+      "科目",
+      "产品名称",
+      "尺寸/天数",
+      "数量",
+      "单位",
+      "成本单价",
+      "成本总价",
+      "单价",
+      "总价",
+      "产品描述",
     ];
 
     // 列宽：A窄一点，B/C宽，J更宽，其它适中
@@ -284,7 +284,7 @@
     titleCell.fill = {
       type: "pattern",
       pattern: "solid",
-      fgColor: { argb: "FFED7D31" }, // ARGB：FF + ED7D31
+      fgColor: { argb: "FFED7D31" },
     };
     titleCell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 16 };
     titleCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -297,16 +297,16 @@
     headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     headerRow.height = 20;
 
-    // 需求6：填充 H2:I2（2到2I）底色为 FFFF00
-    for (var hc = 8; hc <= 9; hc++) {
+    // 需求6：填充 A2:I2 黄底（2到2I）
+    for (var hc = 1; hc <= 9; hc++) {
       ws.getCell(2, hc).fill = {
         type: "pattern",
         pattern: "solid",
-        fgColor: { argb: "FFFFFF00" }, // FFFF00
+        fgColor: { argb: "FFFFFF00" },
       };
     }
 
-    // 导出排序：按产品类型分组并按指定顺序输出；未知类型归并为“其他”
+    // 导出排序：按产品类型（=数据表名）分组并按指定顺序输出；未知类型归并为“其他”
     var typeOrder = [
       "物料搭建",
       "印刷制作",
@@ -346,7 +346,6 @@
       var bi = Object.prototype.hasOwnProperty.call(typeOrderMap, bt) ? typeOrderMap[bt] : typeOrderMap["其他"];
       if (ai !== bi) return ai - bi;
 
-      // 同类型下：产品名称、编号排序，保证输出稳定且“列在一起”
       var an = normalizeName(a && a.name ? a.name : "");
       var bn = normalizeName(b && b.name ? b.name : "");
       if (an !== bn) return an.localeCompare(bn, "zh");
@@ -356,13 +355,15 @@
       return ac.localeCompare(bc, "zh");
     });
 
-    // 数据行从第3行开始：按产品类型分组输出（需求4/5）
+    // 从第3行开始写数据：分组标题行 + 产品行 + 组小计行 + 最终含税合计行
     var rowNum = 3;
 
     var groupType = null;
-    var groupIdx = 0;
-    var groupStartRow = 0; // 本组第一条产品数据行
-    var groupEndRow = 0; // 本组最后一条产品数据行
+    var groupIdx = 0; // 用于“一二三...”
+    var groupSerial = 0; // 用于产品行 A 列 1/2/3...
+    var groupStartRow = 0; // 本组第一条产品数据行行号
+    var groupEndRow = 0; // 本组最后一条产品数据行行号
+    var subtotalRows = []; // 记录每个“小计行”的行号，用于底部合计
 
     function styleRowAllCols(rn, fillArgb, bold) {
       for (var cc = 1; cc <= headers.length; cc++) {
@@ -382,7 +383,7 @@
     }
 
     function addGroupHeader(typeLabel) {
-      // 需求4：本组最上方插入标题行，底色BFBFBF，合并B到J，A列写“一/二/三...”
+      // 需求4：组标题行，灰底BFBFBF，合并B..J，A填“一二三...”，加粗
       ws.getRow(rowNum).height = 20;
 
       ws.getCell(rowNum, 1).value = toCnIndex(groupIdx);
@@ -394,21 +395,50 @@
     }
 
     function addGroupSubtotal(startRn, endRn) {
-      // 需求5：本组最下方插入小计行：合并A到F写“小计”，G填成本总价合计，I填总价合计
+      // 需求5：组小计行：合并A..F写“小计”，G/I分别求和，G/I黄底，加粗
+      var subtotalRowNum = rowNum;
+
+      ws.getRow(subtotalRowNum).height = 20;
+
+      ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 6); // A..F
+      ws.getCell(subtotalRowNum, 1).value = "小计";
+
+      ws.getCell(subtotalRowNum, 7).value = { formula: "SUM(G" + startRn + ":G" + endRn + ")" };
+      ws.getCell(subtotalRowNum, 9).value = { formula: "SUM(I" + startRn + ":I" + endRn + ")" };
+
+      styleRowAllCols(subtotalRowNum, null, true);
+
+      ws.getCell(subtotalRowNum, 7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+      ws.getCell(subtotalRowNum, 9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
+
+      subtotalRows.push(subtotalRowNum);
+      rowNum++;
+    }
+
+    function addGrandTotalWithTax() {
+      // 新增需求：底部“含税合计（税价6%）”
+      // A..F 合并；G=sum所有小计G；I=sum所有小计I * 1.06；本行加粗
       ws.getRow(rowNum).height = 20;
 
-      ws.mergeCells(rowNum, 1, rowNum, 6); // A..F
-      ws.getCell(rowNum, 1).value = "小计";
+      ws.mergeCells(rowNum, 1, rowNum, 6);
+      ws.getCell(rowNum, 1).value = "含税合计（税价6%）";
 
-      ws.getCell(rowNum, 7).value = { formula: "SUM(G" + startRn + ":G" + endRn + ")" };
-      ws.getCell(rowNum, 9).value = { formula: "SUM(I" + startRn + ":I" + endRn + ")" };
+      if (subtotalRows.length === 0) {
+        ws.getCell(rowNum, 7).value = 0;
+        ws.getCell(rowNum, 9).value = 0;
+      } else {
+        var gRefs = [];
+        var iRefs = [];
+        for (var i = 0; i < subtotalRows.length; i++) {
+          gRefs.push("G" + subtotalRows[i]);
+          iRefs.push("I" + subtotalRows[i]);
+        }
+
+        ws.getCell(rowNum, 7).value = { formula: "SUM(" + gRefs.join(",") + ")" };
+        ws.getCell(rowNum, 9).value = { formula: "SUM(" + iRefs.join(",") + ")*1.06" };
+      }
 
       styleRowAllCols(rowNum, null, true);
-
-      // G、I 黄底
-      ws.getCell(rowNum, 7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-      ws.getCell(rowNum, 9).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFFF00" } };
-
       rowNum++;
     }
 
@@ -416,25 +446,29 @@
       var it = selectedArr[si];
       var typeLabel = canonicalType(it.sourceTableName || "");
 
-      // 进入新分组：先为上一个分组补小计，再插入新组标题行
       if (typeLabel !== groupType) {
         if (groupType != null) {
           addGroupSubtotal(groupStartRow, groupEndRow);
         }
+
         groupType = typeLabel;
         groupIdx++;
+        groupSerial = 0;
+
         addGroupHeader(groupType);
 
         groupStartRow = rowNum;
         groupEndRow = rowNum - 1;
       }
 
+      groupSerial++;
+
       var desc = normalizeNewlines(it.desc || "");
       var rn = rowNum;
       var row = ws.getRow(rn);
 
-      // A: 科目（留空）
-      row.getCell(1).value = "";
+      // A: 科目（组内数字序号 1/2/3...）
+      row.getCell(1).value = groupSerial;
 
       // B: 产品名称
       row.getCell(2).value = it.name || "";
@@ -470,7 +504,7 @@
         cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
 
         var v = cell.value;
-        if (v && typeof v === "object" && v.formula) continue; // 公式列按1行估算
+        if (v && typeof v === "object" && v.formula) continue;
         if (typeof v === "number") continue;
 
         var t = v == null ? "" : String(v);
@@ -483,10 +517,12 @@
       rowNum++;
     }
 
-    // 最后一个分组补小计
     if (groupType != null && groupStartRow <= groupEndRow) {
       addGroupSubtotal(groupStartRow, groupEndRow);
     }
+
+    // 新增：底部含税合计行
+    addGrandTotalWithTax();
 
     // 所有单元格：细线框 + 居中（标题/表头/数据区全覆盖）
     var lastRow = rowNum - 1;
@@ -598,7 +634,8 @@
     async function loadProductsFromTable(meta) {
       var table = await bitable.base.getTableById(meta.id);
 
-      var fCode = (await getFieldByAnyName(table, ["产品编号"], true)).field;
+      // 产品编号在导出里已不需要：这里改为非必需，避免某些表缺字段导致无法加载
+      var fCode = (await getFieldByAnyName(table, ["产品编号"], false)).field;
       var fName = (await getFieldByAnyName(table, ["产品名称"], true)).field;
       var fSizeDays = (await getFieldByAnyName(table, ["尺寸/天数"], true)).field;
       var fUnit = (await getFieldByAnyName(table, ["计算单位"], true)).field;
@@ -619,7 +656,7 @@
           sourceTableName: meta.name,
           recordId: recordId,
 
-          code: toPlainText(fields[fCode.id]) || "",
+          code: fCode ? (toPlainText(fields[fCode.id]) || "") : "",
           name: toPlainText(fields[fName.id]) || "未命名产品",
           sizeDays: toPlainText(fields[fSizeDays.id]) || "",
           unit: toPlainText(fields[fUnit.id]) || "",
@@ -798,7 +835,7 @@
 
       exportXlsx(selected, quoteName)
         .then(function () {
-          setMsg("已导出 XLSX（含公式/列宽/换行/行高/标题行/分组与小计）。", "ok");
+          setMsg("已导出 XLSX（含公式/列宽/换行/行高/分组/小计/含税合计）。", "ok");
         })
         .catch(function (e) {
           setMsg("导出失败：" + (e && e.message ? e.message : String(e)), "err");
