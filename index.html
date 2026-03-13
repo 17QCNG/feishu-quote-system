@@ -28,7 +28,7 @@
       }
 
       .container {
-        max-width: 680px;
+        max-width: 760px;
         margin: 0 auto;
         background: var(--card);
         border: 1px solid rgba(0, 0, 0, 0.06);
@@ -79,13 +79,11 @@
         background: #f7f8fa;
       }
 
-      .tables {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 10px;
-        background: #fff;
-        max-height: 200px;
-        overflow: auto;
+      .tabbtn.active {
+        border-color: rgba(51, 112, 255, 0.5);
+        background: rgba(51, 112, 255, 0.08);
+        color: var(--primary2);
+        font-weight: 700;
       }
 
       .table-item {
@@ -108,7 +106,7 @@
         border: 1px solid var(--line);
         border-radius: 10px;
         padding: 10px;
-        max-height: 340px;
+        max-height: 380px;
         overflow: auto;
         background: #fff;
       }
@@ -153,6 +151,17 @@
         border: 1px solid var(--line);
         background: #fff;
         font-size: 12px;
+        box-sizing: border-box;
+      }
+
+      .major-select {
+        width: 100%;
+        min-height: 210px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 13px;
         box-sizing: border-box;
       }
 
@@ -221,6 +230,9 @@
           grid-column: 2 / 3;
           width: 100%;
         }
+        .major-select {
+          min-height: 240px;
+        }
       }
     </style>
   </head>
@@ -278,13 +290,14 @@
           <div id="mainVisualList" class="hint" style="margin-top: 8px"></div>
 
           <div class="hint">
-            每次添加会在报价表中作为一条独立“主视觉喷绘”产品输出；成本/单价匹配【物料搭建】中的“主视觉喷绘”（按供应商匹配）。
+            每次添加会在报价表中作为一条独立“主视觉喷绘”产品输出；成本/单价匹配【物料搭建】中的“主视觉喷绘”（按供应商匹配）。<br />
+            【物料搭建】【印刷制作】产品的默认供应商会跟随此处选择（仍可对单项手动修改）。
           </div>
         </div>
       </div>
 
       <div class="section">
-        <h3>步骤1：选择产品大类（可多选）</h3>
+        <h3>步骤1：选择产品大类（下拉多选）</h3>
 
         <div class="rowline">
           <button id="selectAllTables" class="smallbtn" type="button">
@@ -298,20 +311,42 @@
           </button>
         </div>
 
-        <div id="tableList" class="tables">
-          <div class="hint">加载中...</div>
-        </div>
+        <select id="majorSelect" class="major-select" multiple></select>
 
         <div class="hint">
+          支持多选（PC 可按住 Ctrl/Command，移动端可点选多个条目）。<br />
           输出列固定为：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
           同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
         </div>
       </div>
 
       <div class="section">
-        <h3>步骤2：选择产品（并选择供应商与数量）</h3>
-        <div id="productList" class="products">
-          <div class="hint">请先在步骤1勾选至少一个产品大类</div>
+        <h3>步骤2：选择产品（待选库 / 已选产品）</h3>
+
+        <div class="rowline">
+          <button id="viewPool" class="smallbtn tabbtn active" type="button">
+            待选库
+          </button>
+          <button id="viewSelected" class="smallbtn tabbtn" type="button">
+            已选产品
+          </button>
+        </div>
+
+        <div style="margin-top: 8px">
+          <input
+            id="productSearch"
+            class="input"
+            type="text"
+            placeholder="搜索产品：输入关键字（匹配名称/描述/尺寸/供应商），自动推荐排序"
+          />
+          <div class="hint">
+            已选产品会在“待选库”中自动隐藏；在“已选产品”取消勾选后会回到待选库。<br />
+            本次操作已选产品会临时暂存（刷新页面不丢失，关闭页签后清空）。
+          </div>
+        </div>
+
+        <div id="productList" class="products" style="margin-top: 8px">
+          <div class="hint">请先在步骤1选择至少一个产品大类</div>
         </div>
       </div>
 
