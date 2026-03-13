@@ -211,10 +211,11 @@
         border: 1px solid rgba(245, 63, 63, 0.25);
       }
 
-      /* ====== 新：产品大类下拉多选 ====== */
+      /* ====== 新：产品大类下拉多选（节省空间） ====== */
       .major-dropdown {
         position: relative;
         width: 100%;
+        margin-top: 8px;
       }
 
       .major-btn {
@@ -283,7 +284,7 @@
         margin-top: 2px;
       }
 
-      /* ====== 新：已选产品分组颜色 ====== */
+      /* ====== 新：已选产品按大类分组+颜色区分 ====== */
       .group-block {
         border: 1px solid var(--line);
         border-radius: 12px;
@@ -403,7 +404,7 @@
           </button>
         </div>
 
-        <div id="majorDropdown" class="major-dropdown" style="margin-top: 8px">
+        <div id="majorDropdown" class="major-dropdown">
           <button id="majorDropdownBtn" class="input major-btn" type="button">
             <span class="major-btn-text">请选择产品大类</span>
             <span class="major-btn-arrow">▼</span>
@@ -412,7 +413,8 @@
         </div>
 
         <div class="hint">
-          未搜索时，“待选库”会按你勾选的大类显示；当你在搜索框输入关键字时，会从<strong>全部产品</strong>中搜索（不受大类限制）。<br />
+          未搜索时，“待选库”会按你勾选的大类显示；当你在搜索框输入关键字时，会从
+          <strong>全部产品</strong> 中搜索（不受大类限制）。<br />
           输出列固定为：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
           同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
         </div>
@@ -427,6 +429,15 @@
           </button>
           <button id="viewSelected" class="smallbtn tabbtn" type="button">
             已选产品
+          </button>
+
+          <span style="flex: 1 1 auto"></span>
+
+          <button id="selectAllVisibleProducts" class="smallbtn" type="button">
+            全选当前列表
+          </button>
+          <button id="clearAllSelectedProducts" class="smallbtn" type="button">
+            清空已选
           </button>
         </div>
 
