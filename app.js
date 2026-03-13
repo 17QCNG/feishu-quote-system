@@ -297,8 +297,8 @@
     headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     headerRow.height = 20;
 
-    // 需求6：填充 A2:I2 黄底（2到2I）
-    for (var hc = 1; hc <= 9; hc++) {
+    // 需求6：填充 H2:I2 黄底（2到2I）
+    for (var hc = 8; hc <= 9; hc++) {
       ws.getCell(2, hc).fill = {
         type: "pattern",
         pattern: "solid",
