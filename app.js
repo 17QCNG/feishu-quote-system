@@ -515,7 +515,7 @@
       groupSerial++;
 
       var desc = normalizeNewlines(it.desc || "");
-      if (it && it.supplier) {
+     /*  if (it && it.supplier) {
         desc = (desc ? desc + "\n" : "") + "供应商：" + it.supplier;
       }
 
@@ -530,7 +530,7 @@
       row.getCell(6).value = Number(it.cost || 0);
       row.getCell(7).value = { formula: "F" + rn + "*D" + rn };
       row.getCell(8).value = Number(it.price || 0);
-      row.getCell(9).value = { formula: "H" + rn + "*D" + rn };
+      row.getCell(9).value = { formula: "H" + rn + "*D" + rn }; */
       row.getCell(10).value = desc;
 
       var maxLines = 1;
