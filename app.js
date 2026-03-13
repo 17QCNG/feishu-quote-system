@@ -175,16 +175,6 @@
     URL.revokeObjectURL(url);
   }
 
-  function getSelectedMajors() {
-    var sel = document.getElementById("majorSelect");
-    if (!sel) return [];
-    var majors = [];
-    for (var i = 0; i < sel.options.length; i++) {
-      if (sel.options[i].selected) majors.push(sel.options[i].value);
-    }
-    return majors;
-  }
-
   function normalizeNewlines(s) {
     return String(s || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   }
@@ -592,6 +582,9 @@
     for (var i = 0; i < allItems.length; i++) {
       var it = allItems[i];
 
+      // 需求5：产品选择中始终隐藏“主视觉喷绘”
+      if (normalizeName(it.name) === "主视觉喷绘") continue;
+
       var k =
         normalizeName(it.name) +
         "||" +
@@ -612,7 +605,6 @@
         map.set(k, tpl);
       }
 
-      // 如果同一个 key 混入不同大类，这里保留第一个 major（通常不会发生）
       if (!tpl.major) tpl.major = it.sourceTableName || "";
 
       tpl.options.push({
@@ -652,7 +644,6 @@
   function splitTokens(q) {
     var s = normalizeName(q);
     if (!s) return [];
-    // 支持空格/中文空格/逗号等分隔
     var parts = s
       .replace(/[，,；;、|/]+/g, " ")
       .split(/\s+/g)
@@ -671,7 +662,7 @@
   }
 
   function scoreTemplateByQuery(tpl, tokens) {
-    if (!tokens || tokens.length === 0) return 1; // 无搜索时都可显示，给个基础分
+    if (!tokens || tokens.length === 0) return 1;
     var name = lower(tpl && tpl.name ? tpl.name : "");
     var sizeDays = lower(tpl && tpl.sizeDays ? tpl.sizeDays : "");
     var unit = lower(tpl && tpl.unit ? tpl.unit : "");
@@ -679,7 +670,6 @@
     var desc = "";
     var suppliersText = "";
 
-    // 轻量拼接：取前几个 option 的描述/供应商做搜索参考
     if (tpl && tpl.options && tpl.options.length) {
       for (var i = 0; i < tpl.options.length; i++) {
         var opt = tpl.options[i];
@@ -731,10 +721,72 @@
     } catch (e) {}
   }
 
+  function runWithConcurrency(items, worker, limit) {
+    var idx = 0;
+    var inFlight = 0;
+    var results = [];
+    limit = Math.max(1, Number(limit) || 4);
+
+    return new Promise(function (resolve) {
+      function next() {
+        while (inFlight < limit && idx < items.length) {
+          (function (curIndex) {
+            var item = items[curIndex];
+            idx++;
+            inFlight++;
+
+            Promise.resolve()
+              .then(function () {
+                return worker(item, curIndex);
+              })
+              .then(function (r) {
+                results[curIndex] = r;
+              })
+              .catch(function (e) {
+                results[curIndex] = { __error: e };
+              })
+              .finally(function () {
+                inFlight--;
+                if (idx >= items.length && inFlight === 0) resolve(results);
+                else next();
+              });
+          })(idx);
+        }
+      }
+
+      next();
+    });
+  }
+
+  function hashStr(s) {
+    var str = String(s || "");
+    var h = 0;
+    for (var i = 0; i < str.length; i++) {
+      h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return h >>> 0;
+  }
+
+  function majorToColor(major) {
+    var palette = [
+      "#3370FF",
+      "#00B42A",
+      "#FF7D00",
+      "#F53F3F",
+      "#86909C",
+      "#722ED1",
+      "#14C9C9",
+      "#F7BA1E",
+      "#1D2129",
+      "#2B5DD4",
+    ];
+    var idx = hashStr(major) % palette.length;
+    return palette[idx];
+  }
+
   async function main() {
     clearMsg();
 
-    var majorSelectEl = document.getElementById("majorSelect");
     var productList = document.getElementById("productList");
     var exportBtn = document.getElementById("exportXlsx");
     var selectAllBtn = document.getElementById("selectAllTables");
@@ -754,7 +806,10 @@
     var mvAdd = document.getElementById("addMainVisual");
     var mvList = document.getElementById("mainVisualList");
 
-    if (!majorSelectEl || !productList || !exportBtn) {
+    var majorDropdownBtn = document.getElementById("majorDropdownBtn");
+    var majorDropdownPanel = document.getElementById("majorDropdownPanel");
+
+    if (!productList || !exportBtn || !majorDropdownBtn || !majorDropdownPanel) {
       setMsg("页面元素缺失：请确认 index.html 与 app.js 已正确上传。", "err");
       return;
     }
@@ -805,10 +860,14 @@
       try {
         var arr = JSON.parse(raw);
         if (!Array.isArray(arr)) return [];
-        // 先塞一个“占位选择”，等模板加载后再按模板重算价格/描述等
+
         for (var i = 0; i < arr.length; i++) {
           var x = arr[i];
           if (!x || !x.key) continue;
+
+          // 需求5：不让“主视觉喷绘”进入产品选择/已选区（它只由主视觉模块添加）
+          if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
+
           selected.set(String(x.key), {
             name: "",
             sizeDays: "",
@@ -848,8 +907,6 @@
     // === 主视觉喷绘 & 供应商跟随逻辑 ===
     var mainVisualItems = []; // { supplier, size, qty }
     var mainVisualPriceBook = null; // Map supplier -> { cost, price, unit, desc, sourceTableName }
-
-    // 当前“主视觉喷绘供应商”选择（用于默认跟随）
     var mainVisualDefaultSupplier = "";
 
     function getDefaultSupplierForMajor(major) {
@@ -863,21 +920,18 @@
       var target = normalizeName(supplierName);
       if (!target) return 0;
 
-      // 先按“展示名”匹配（空供应商 -> 默认供应商）
       for (var i = 0; i < tplRef.options.length; i++) {
         var opt = tplRef.options[i];
         var disp = normalizeName(displaySupplierName(opt));
         if (disp === target) return i;
       }
 
-      // 再按“原始 supplier 字段”匹配
       for (var j = 0; j < tplRef.options.length; j++) {
         var opt2 = tplRef.options[j];
         var raw = normalizeName(opt2 && opt2.supplier ? opt2.supplier : "");
         if (raw === target) return j;
       }
 
-      // 如果目标是“默认供应商”，尽量找 raw supplier 为空的那条
       if (target === "默认供应商") {
         for (var k = 0; k < tplRef.options.length; k++) {
           var opt3 = tplRef.options[k];
@@ -888,28 +942,98 @@
       return 0;
     }
 
+    // === Base 表解析索引 ===
     var metas = [];
     var metasParsed = [];
-    var majorIndex = new Map(); // major -> { major, metas: [{id,name,major,supplier}], suppliers:Set() }
-    var currentTemplates = [];
-    var currentTemplatesMap = new Map(); // templateKey -> template
+    var majorIndex = new Map(); // major -> { major, metas: [...], suppliers:Set() }
 
+    // === 全量产品模板（需求6：搜索以全量为库） ===
+    var allTemplates = [];
+    var allTemplatesMap = new Map(); // templateKey -> template
+
+    // === 大类下拉选择（需求1） ===
+    var majorSelected = new Set();
+
+    function getSelectedMajors() {
+      var arr = [];
+      majorSelected.forEach(function (m) {
+        arr.push(m);
+      });
+      return arr;
+    }
+
+    function setMajorSelectedAll(flag) {
+      majorSelected.clear();
+      if (flag) {
+        majorIndex.forEach(function (bucket) {
+          if (bucket && bucket.major) majorSelected.add(bucket.major);
+        });
+      }
+      renderMajorDropdownOptions();
+      renderProducts();
+    }
+
+    function toggleMajorDropdown(open) {
+      var isOpen = majorDropdownPanel.style.display === "block";
+      var next = open != null ? !!open : !isOpen;
+      majorDropdownPanel.style.display = next ? "block" : "none";
+
+      var arrow = majorDropdownBtn.querySelector(".major-btn-arrow");
+      if (arrow) arrow.textContent = next ? "▲" : "▼";
+    }
+
+    function updateMajorBtnText() {
+      var textEl = majorDropdownBtn.querySelector(".major-btn-text");
+      if (!textEl) return;
+
+      var arr = getSelectedMajors();
+      arr.sort(function (a, b) {
+        return String(a).localeCompare(String(b), "zh");
+      });
+
+      if (arr.length === 0) {
+        textEl.textContent = "请选择产品大类";
+        return;
+      }
+
+      var preview = arr.slice(0, 4).join("、");
+      textEl.textContent =
+        "已选 " +
+        arr.length +
+        " 个：" +
+        preview +
+        (arr.length > 4 ? "..." : "");
+    }
+
+    // === 视图状态 ===
     var productViewMode = "pool"; // pool | selected
     var productSearchQuery = "";
 
     function updateViewButtonsText() {
       if (!viewPoolBtn || !viewSelectedBtn) return;
 
-      var poolCount = 0;
-      var selCount = 0;
+      var tokens = splitTokens(productSearchQuery);
 
-      for (var i = 0; i < currentTemplates.length; i++) {
-        if (selected.has(currentTemplates[i].key)) selCount++;
-        else poolCount++;
+      var poolScope = [];
+      if (tokens.length > 0) {
+        poolScope = allTemplates.slice();
+      } else {
+        var majors = getSelectedMajors();
+        if (majors.length > 0) {
+          var majorSet = new Set(majors);
+          for (var i = 0; i < allTemplates.length; i++) {
+            if (majorSet.has(allTemplates[i].major)) poolScope.push(allTemplates[i]);
+          }
+        }
+      }
+
+      var poolCount = 0;
+      for (var j = 0; j < poolScope.length; j++) {
+        if (!selected.has(poolScope[j].key)) poolCount++;
       }
 
       viewPoolBtn.textContent = "待选库（" + poolCount + "）";
-      viewSelectedBtn.textContent = "已选产品（" + selCount + "）";
+      viewSelectedBtn.textContent = "已选产品（" + selected.size + "）";
 
       if (productViewMode === "pool") {
         viewPoolBtn.classList.add("active");
@@ -923,24 +1047,26 @@
     function setProductViewMode(mode) {
       productViewMode = mode === "selected" ? "selected" : "pool";
       updateViewButtonsText();
-      renderProducts(currentTemplates);
+      renderProducts();
     }
 
     function setProductSearchQuery(q) {
       productSearchQuery = String(q || "");
-      renderProducts(currentTemplates);
+      renderProducts();
     }
 
-    function rebuildTemplatesMap() {
-      currentTemplatesMap = new Map();
-      for (var i = 0; i < currentTemplates.length; i++) {
-        currentTemplatesMap.set(currentTemplates[i].key, currentTemplates[i]);
+    function rebuildAllTemplatesMap() {
+      allTemplatesMap = new Map();
+      for (var i = 0; i < allTemplates.length; i++) {
+        allTemplatesMap.set(allTemplates[i].key, allTemplates[i]);
       }
     }
 
     function applyPick(templateKey, tplRef, supplierIndex, qtyValue, supplierManualFlag) {
       var idx = Math.max(0, Number(supplierIndex) || 0);
-      var opt2 = (tplRef && tplRef.options && tplRef.options[idx]) || (tplRef && tplRef.options ? tplRef.options[0] : null);
+      var opt2 =
+        (tplRef && tplRef.options && tplRef.options[idx]) ||
+        (tplRef && tplRef.options ? tplRef.options[0] : null);
       if (!opt2) return;
 
       var next = {
@@ -969,15 +1095,43 @@
         if (!v) return;
         if (v.__supplierManual) return;
 
-        var tpl = currentTemplatesMap.get(key);
+        var tpl = allTemplatesMap.get(key);
         if (!tpl) return;
 
         var major = tpl.major || v.sourceTableName || "";
         if (!isFollowMajor(major)) return;
 
         var idx = findOptionIndexBySupplier(tpl, defSup);
-        // 保留数量
         applyPick(key, tpl, idx, v.qty, false);
+      });
+    }
+
+    function rehydrateSelectionsFromAllTemplates() {
+      // 需求3：不清理 selected（无论当前大类选择什么，都保留）
+      // 仅做：如果模板存在 -> 用模板重算成本/单价/描述 & 套用供应商跟随逻辑
+      selected.forEach(function (ex, key) {
+        var tpl = allTemplatesMap.get(key);
+        if (!tpl) return;
+
+        // 需求5：确保主视觉喷绘永远不出现在产品选择/已选区
+        if (normalizeName(tpl.name) === "主视觉喷绘") {
+          deleteSelected(key);
+          return;
+        }
+
+        var idx = 0;
+
+        if (ex.__supplierManual) {
+          if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
+          if (!tpl.options[idx]) idx = findOptionIndexBySupplier(tpl, ex.supplier || "");
+        } else {
+          var defSup = getDefaultSupplierForMajor(tpl.major);
+          if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
+          else if (ex.supplier) idx = findOptionIndexBySupplier(tpl, ex.supplier);
+          else if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
+        }
+
+        applyPick(key, tpl, idx, ex.qty, !!ex.__supplierManual);
       });
     }
 
@@ -1030,56 +1184,90 @@
     var typeOrderMap = {};
     for (var oi = 0; oi < typeOrder.length; oi++) typeOrderMap[typeOrder[oi]] = oi;
 
-    function renderMajorSelectOptions() {
-      majorSelectEl.innerHTML = "";
+    function majorSort(a, b) {
+      var ai = typeOrderMap[a];
+      var bi = typeOrderMap[b];
+      if (ai == null && bi == null) return String(a).localeCompare(String(b), "zh");
+      if (ai == null) return 1;
+      if (bi == null) return -1;
+      return ai - bi;
+    }
+
+    function renderMajorDropdownOptions() {
+      majorDropdownPanel.innerHTML = "";
 
       if (!majorIndex || majorIndex.size === 0) {
-        var opt0 = document.createElement("option");
-        opt0.value = "";
-        opt0.textContent = "当前 Base 没有数据表";
-        majorSelectEl.appendChild(opt0);
-        majorSelectEl.disabled = true;
+        majorDropdownBtn.disabled = true;
+        updateMajorBtnText();
         return;
       }
-      majorSelectEl.disabled = false;
+      majorDropdownBtn.disabled = false;
 
       var majors = [];
       majorIndex.forEach(function (v) {
         majors.push(v.major);
       });
 
-      majors.sort(function (a, b) {
-        var ai = typeOrderMap[a];
-        var bi = typeOrderMap[b];
-        if (ai == null && bi == null) return String(a).localeCompare(String(b), "zh");
-        if (ai == null) return 1;
-        if (bi == null) return -1;
-        return ai - bi;
-      });
+      majors.sort(majorSort);
 
       for (var i = 0; i < majors.length; i++) {
         var major = majors[i];
         var bucket = majorIndex.get(major);
 
         var supplierArr = [];
-        bucket.suppliers.forEach(function (x) {
-          supplierArr.push(x);
-        });
+        if (bucket && bucket.suppliers)
+          bucket.suppliers.forEach(function (x) {
+            supplierArr.push(x);
+          });
+
         supplierArr.sort(function (x, y) {
           return String(x).localeCompare(String(y), "zh");
         });
 
-        var suffix = "";
+        var supText = "";
         if (supplierArr.length > 0) {
           var preview = supplierArr.slice(0, 3).join("、");
-          suffix = "（供应商：" + preview + (supplierArr.length > 3 ? "等" : "") + "）";
+          supText = "供应商：" + preview + (supplierArr.length > 3 ? "等" : "");
         }
 
-        var opt = document.createElement("option");
-        opt.value = major;
-        opt.textContent = major + suffix;
-        majorSelectEl.appendChild(opt);
+        var item = document.createElement("div");
+        item.className = "major-item";
+
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = majorSelected.has(major);
+
+        var box = document.createElement("div");
+        box.innerHTML =
+          '<div class="major-label">' +
+          escapeHtml(major) +
+          "</div>" +
+          (supText ? '<div class="major-sup">' + escapeHtml(supText) + "</div>" : "");
+
+        item.appendChild(cb);
+        item.appendChild(box);
+
+        (function (mj, cbEl) {
+          item.addEventListener("click", function (e) {
+            if (e && e.target && e.target.tagName === "INPUT") return;
+
+            cbEl.checked = !cbEl.checked;
+            cbEl.dispatchEvent(new Event("change"));
+          });
+
+          cbEl.addEventListener("change", function () {
+            if (this.checked) majorSelected.add(mj);
+            else majorSelected.delete(mj);
+
+            updateMajorBtnText();
+            renderProducts();
+          });
+        })(major, cb);
+
+        majorDropdownPanel.appendChild(item);
       }
+
+      updateMajorBtnText();
     }
 
     async function loadProductsFromTable(meta) {
@@ -1107,7 +1295,7 @@
 
         items.push({
           sourceTableId: meta.id,
-          sourceTableName: major, // 用大类参与导出分组
+          sourceTableName: major,
           supplier: supplier,
           sourceTableNameRaw: meta.name || "",
           recordId: recordId,
@@ -1127,28 +1315,17 @@
       return items;
     }
 
-    function computeVisibleTemplates(templates) {
-      var arr = [];
-      for (var i = 0; i < templates.length; i++) {
-        var tpl = templates[i];
-        var isSel = selected.has(tpl.key);
-        if (productViewMode === "pool") {
-          if (isSel) continue; // 已选从库中隐藏
-        } else {
-          if (!isSel) continue;
-        }
-        arr.push(tpl);
-      }
-
+    function computeSearchedTemplates(scopeTemplates) {
       var tokens = splitTokens(productSearchQuery);
-      if (tokens.length === 0) {
-        return arr;
-      }
+      if (tokens.length === 0) return scopeTemplates.slice();
+
+      // 需求6：搜索直接以全量产品库为库（不受大类限制）
+      var base = allTemplates;
 
       var scored = [];
-      for (var j = 0; j < arr.length; j++) {
-        var s = scoreTemplateByQuery(arr[j], tokens);
-        if (s > 0) scored.push({ tpl: arr[j], score: s });
+      for (var j = 0; j < base.length; j++) {
+        var s = scoreTemplateByQuery(base[j], tokens);
+        if (s > 0) scored.push({ tpl: base[j], score: s });
       }
 
       scored.sort(function (a, b) {
@@ -1164,44 +1341,83 @@
       return out;
     }
 
-    function renderProducts(templates) {
+    function getPoolScopeTemplates() {
+      var tokens = splitTokens(productSearchQuery);
+      if (tokens.length > 0) {
+        return allTemplates.slice();
+      }
+
+      var majors = getSelectedMajors();
+      if (!majors || majors.length === 0) return [];
+
+      var majorSet = new Set(majors);
+      var out = [];
+      for (var i = 0; i < allTemplates.length; i++) {
+        if (majorSet.has(allTemplates[i].major)) out.push(allTemplates[i]);
+      }
+      return out;
+    }
+
+    function renderProducts() {
       productList.innerHTML = "";
       updateViewButtonsText();
 
-      if (!templates || templates.length === 0) {
-        productList.innerHTML = '<div class="hint">选中的产品大类没有可用产品（可能无记录）。</div>';
+      if (!allTemplates || allTemplates.length === 0) {
+        productList.innerHTML = '<div class="hint">产品库尚未加载完成，请稍等或点击“重新加载产品”。</div>';
         return;
       }
 
-      var visible = computeVisibleTemplates(templates);
+      if (productViewMode === "selected") {
+        renderSelectedGrouped();
+        return;
+      }
 
-      if (!visible || visible.length === 0) {
-        var hint =
-          productViewMode === "pool"
-            ? "当前待选库为空（可能都已选中，或搜索无匹配）。"
-            : "当前没有已选产品（或搜索无匹配）。";
+      // pool
+      var scope = getPoolScopeTemplates();
+
+      // 当未选择大类 & 未搜索时给提示；有搜索时直接展示全量搜索结果
+      var tokens = splitTokens(productSearchQuery);
+      if ((!scope || scope.length === 0) && tokens.length === 0) {
+        productList.innerHTML =
+          '<div class="hint">请先在步骤1选择至少一个产品大类；或者直接在搜索框输入关键字（会从全部产品中搜索）。</div>';
+        return;
+      }
+
+      var visible = computeSearchedTemplates(scope);
+
+      // pool：隐藏已选
+      var list = [];
+      for (var i = 0; i < visible.length; i++) {
+        var tpl = visible[i];
+        if (selected.has(tpl.key)) continue;
+        list.push(tpl);
+      }
+
+      if (!list || list.length === 0) {
+        var hint = "当前待选库为空（可能都已选中，或搜索无匹配）。";
         productList.innerHTML = '<div class="hint">' + escapeHtml(hint) + "</div>";
         return;
       }
 
-      for (var i = 0; i < visible.length; i++) {
+      for (var idx = 0; idx < list.length; idx++) {
         (function () {
-          var tpl = visible[i];
-          var picked = selected.get(tpl.key);
+          var tpl = list[idx];
 
           var row = document.createElement("div");
           row.className = "prow";
 
           var cb = document.createElement("input");
           cb.type = "checkbox";
-          cb.checked = !!picked;
+          cb.checked = false;
 
-          var showCost = picked ? picked.cost : (tpl.options[0] ? tpl.options[0].cost : 0);
-          var showPrice = picked ? picked.price : (tpl.options[0] ? tpl.options[0].price : 0);
-          var showDesc = picked ? picked.desc : (tpl.options[0] ? tpl.options[0].desc : "");
+          var showCost = tpl.options[0] ? tpl.options[0].cost : 0;
+          var showPrice = tpl.options[0] ? tpl.options[0].price : 0;
+          var showDesc = tpl.options[0] ? tpl.options[0].desc : "";
 
           var mid = document.createElement("div");
-          var majorText = tpl.major ? ('<span class="hl">' + escapeHtml(tpl.major) + "</span>　") : "";
+          var majorText = tpl.major
+            ? '<span class="hl">' + escapeHtml(tpl.major) + "</span>　"
+            : "";
           mid.innerHTML =
             '<div class="pname">' +
             escapeHtml(tpl.name) +
@@ -1222,7 +1438,7 @@
 
           var supplierSel = document.createElement("select");
           supplierSel.className = "select";
-          supplierSel.disabled = !picked;
+          supplierSel.disabled = true;
 
           for (var oi = 0; oi < tpl.options.length; oi++) {
             var opt = tpl.options[oi];
@@ -1235,28 +1451,22 @@
           // 默认供应商跟随：物料搭建/印刷制作 -> 跟随主视觉供应商（仅在未手动改动时生效）
           var defaultSup = getDefaultSupplierForMajor(tpl.major);
           var defaultIdx = defaultSup ? findOptionIndexBySupplier(tpl, defaultSup) : 0;
-
-          supplierSel.value =
-            picked && typeof picked.__optIndex === "number"
-              ? String(picked.__optIndex)
-              : String(defaultIdx);
+          supplierSel.value = String(defaultIdx);
 
           var qty = document.createElement("input");
           qty.className = "qty";
           qty.type = "number";
           qty.min = "1";
           qty.step = "1";
-          qty.value = String(picked ? picked.qty : 1);
-          qty.disabled = !picked;
+          qty.value = "1";
+          qty.disabled = true;
 
           cb.addEventListener("change", function () {
             if (this.checked) {
               qty.disabled = false;
               supplierSel.disabled = false;
 
-              // 选中时：如果该大类需要跟随主视觉，则按主视觉供应商做默认；否则用当前 select 值
               var idxToUse = Number(supplierSel.value) || 0;
-
               var defSup2 = getDefaultSupplierForMajor(tpl.major);
               if (defSup2) {
                 idxToUse = findOptionIndexBySupplier(tpl, defSup2);
@@ -1265,27 +1475,19 @@
 
               applyPick(tpl.key, tpl, idxToUse, qty.value, false);
 
-              // 从待选库选中后，为避免“选中即消失”造成困惑，自动切到“已选产品”
-              if (productViewMode === "pool") {
-                setProductViewMode("selected");
-              } else {
-                renderProducts(currentTemplates);
-              }
+              // 需求2：勾选后不要自动跳转到已选产品页
+              renderProducts();
             } else {
-              qty.disabled = true;
-              supplierSel.disabled = true;
-              deleteSelected(tpl.key);
-              renderProducts(currentTemplates);
+              // pool 页面理论上不会走到这里（pool 里 cb 默认未选，选中后会隐藏并重渲染）
+              renderProducts();
             }
           });
 
           supplierSel.addEventListener("change", function () {
             var it2 = selected.get(tpl.key);
             if (!it2) return;
-
-            // 一旦手动改供应商，则不再跟随主视觉（直到取消勾选/重新选择）
             applyPick(tpl.key, tpl, supplierSel.value, qty.value, true);
-            renderProducts(currentTemplates);
+            renderProducts();
           });
 
           qty.addEventListener("input", function () {
@@ -1300,6 +1502,234 @@
           row.appendChild(supplierSel);
           row.appendChild(qty);
           productList.appendChild(row);
+        })();
+      }
+    }
+
+    function renderSelectedGrouped() {
+      // 需求3：已选页面保留所有已选（不依赖当前大类选择）
+      // 需求4：按大类分组 & 不同颜色区分
+
+      var tokens = splitTokens(productSearchQuery);
+
+      // 先构造“已选展示项”数组
+      var items = [];
+      selected.forEach(function (picked, key) {
+        // 需求5：隐藏主视觉喷绘（即使残留也不展示）
+        if (String(key).indexOf("主视觉喷绘||") === 0) return;
+
+        var tpl = allTemplatesMap.get(key) || null;
+        var major =
+          (tpl && tpl.major) ||
+          (picked && picked.sourceTableName ? picked.sourceTableName : "") ||
+          "其他";
+
+        var name = (tpl && tpl.name) || (picked && picked.name) || "";
+        var sizeDays = (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
+        var unit = (tpl && tpl.unit) || (picked && picked.unit) || "";
+
+        // 过滤搜索：用模板（更完整）打分，模板缺失则降级用 picked 文本
+        if (tokens.length > 0) {
+          var score = 0;
+          if (tpl) score = scoreTemplateByQuery(tpl, tokens);
+          else {
+            var fakeTpl = {
+              name: name,
+              sizeDays: sizeDays,
+              unit: unit,
+              major: major,
+              options: [
+                {
+                  supplier: picked ? picked.supplier : "",
+                  desc: picked ? picked.desc : "",
+                },
+              ],
+            };
+            score = scoreTemplateByQuery(fakeTpl, tokens);
+          }
+          if (score <= 0) return;
+        }
+
+        items.push({
+          key: key,
+          tpl: tpl,
+          picked: picked,
+          major: major,
+          name: name,
+          sizeDays: sizeDays,
+          unit: unit,
+        });
+      });
+
+      if (!items || items.length === 0) {
+        productList.innerHTML =
+          '<div class="hint">当前没有已选产品（或搜索无匹配）。</div>';
+        return;
+      }
+
+      // 分组
+      var groups = new Map(); // major -> items[]
+      for (var i = 0; i < items.length; i++) {
+        var mj = items[i].major || "其他";
+        var arr = groups.get(mj);
+        if (!arr) {
+          arr = [];
+          groups.set(mj, arr);
+        }
+        arr.push(items[i]);
+      }
+
+      // 组排序
+      var majors = [];
+      groups.forEach(function (_, k) {
+        majors.push(k);
+      });
+      majors.sort(majorSort);
+
+      for (var gi = 0; gi < majors.length; gi++) {
+        (function () {
+          var mj = majors[gi];
+          var arr = groups.get(mj) || [];
+
+          arr.sort(function (a, b) {
+            var an = normalizeName(a.name);
+            var bn = normalizeName(b.name);
+            if (an !== bn) return an.localeCompare(bn, "zh");
+            return normalizeName(a.sizeDays).localeCompare(normalizeName(b.sizeDays), "zh");
+          });
+
+          var block = document.createElement("div");
+          block.className = "group-block";
+          block.style.setProperty("--gcolor", majorToColor(mj));
+
+          var header = document.createElement("div");
+          header.className = "group-header";
+          header.innerHTML =
+            '<div class="group-title">' +
+            escapeHtml(mj) +
+            "</div>" +
+            '<div class="group-sub">已选 ' +
+            arr.length +
+            " 项</div>";
+
+          var body = document.createElement("div");
+          body.className = "group-body";
+
+          for (var i = 0; i < arr.length; i++) {
+            (function () {
+              var item = arr[i];
+              var key = item.key;
+              var picked = item.picked || {};
+              var tpl = item.tpl;
+
+              var row = document.createElement("div");
+              row.className = "prow";
+
+              var cb = document.createElement("input");
+              cb.type = "checkbox";
+              cb.checked = true;
+
+              var showCost = picked ? picked.cost : 0;
+              var showPrice = picked ? picked.price : 0;
+              var showDesc = picked ? picked.desc : "";
+
+              var mid = document.createElement("div");
+              var majorText = item.major
+                ? '<span class="hl">' + escapeHtml(item.major) + "</span>　"
+                : "";
+              var missingTplHint = !tpl
+                ? '<div class="pmeta"><span class="hl">提示</span>：该产品在当前产品库中未找到（仍保留在已选列表，可取消勾选移除）。</div>'
+                : "";
+              mid.innerHTML =
+                '<div class="pname">' +
+                escapeHtml(item.name || "未命名产品") +
+                "</div>" +
+                '<div class="pmeta">' +
+                majorText +
+                '<span class="hl">成本：¥' +
+                (showCost || 0) +
+                "</span>　" +
+                '<span class="hl">单价：¥' +
+                (showPrice || 0) +
+                "</span></div>" +
+                (showDesc
+                  ? '<div class="pmeta"><span class="hl">描述</span>：' +
+                    escapeHtml(showDesc) +
+                    "</div>"
+                  : "") +
+                missingTplHint;
+
+              var supplierSel = document.createElement("select");
+              supplierSel.className = "select";
+
+              if (!tpl || !tpl.options || tpl.options.length === 0) {
+                supplierSel.disabled = true;
+                var oo = document.createElement("option");
+                oo.value = "0";
+                oo.textContent = picked && picked.supplier ? picked.supplier : "默认供应商";
+                supplierSel.appendChild(oo);
+              } else {
+                supplierSel.disabled = false;
+                for (var oi = 0; oi < tpl.options.length; oi++) {
+                  var opt = tpl.options[oi];
+                  var o = document.createElement("option");
+                  o.value = String(oi);
+                  o.textContent = displaySupplierName(opt);
+                  supplierSel.appendChild(o);
+                }
+
+                var defaultSup = getDefaultSupplierForMajor(tpl.major);
+                var defaultIdx = defaultSup ? findOptionIndexBySupplier(tpl, defaultSup) : 0;
+
+                supplierSel.value =
+                  picked && typeof picked.__optIndex === "number"
+                    ? String(picked.__optIndex)
+                    : String(defaultIdx);
+              }
+
+              var qty = document.createElement("input");
+              qty.className = "qty";
+              qty.type = "number";
+              qty.min = "1";
+              qty.step = "1";
+              qty.value = String(picked && picked.qty ? picked.qty : 1);
+
+              cb.addEventListener("change", function () {
+                if (!this.checked) {
+                  deleteSelected(key);
+                  renderProducts();
+                } else {
+                  // 已选区不需要支持“从未选 -> 选中”的勾选
+                  this.checked = true;
+                }
+              });
+
+              supplierSel.addEventListener("change", function () {
+                if (!tpl) return;
+                var it2 = selected.get(key);
+                if (!it2) return;
+                applyPick(key, tpl, supplierSel.value, qty.value, true);
+                renderProducts();
+              });
+
+              qty.addEventListener("input", function () {
+                var it3 = selected.get(key);
+                if (!it3) return;
+                it3.qty = Math.max(1, Number(qty.value) || 1);
+                setSelected(key, it3);
+              });
+
+              row.appendChild(cb);
+              row.appendChild(mid);
+              row.appendChild(supplierSel);
+              row.appendChild(qty);
+              body.appendChild(row);
+            })();
+          }
+
+          block.appendChild(header);
+          block.appendChild(body);
+          productList.appendChild(block);
         })();
       }
     }
@@ -1367,7 +1797,6 @@
         mvSupplier.appendChild(o);
       }
 
-      // 尝试保留之前的选择，否则用第一个
       if (mainVisualDefaultSupplier) {
         for (var k = 0; k < mvSupplier.options.length; k++) {
           if (mvSupplier.options[k].value === mainVisualDefaultSupplier) {
@@ -1415,103 +1844,70 @@
       return mainVisualPriceBook;
     }
 
-    function rehydrateSelectionsFromTemplates() {
-      // 使用模板重算占位选择（成本/单价/描述），并套用“默认跟随”逻辑
-      currentTemplates.forEach(function (tpl) {
-        var ex = selected.get(tpl.key);
-        if (!ex) return;
-
-        // 计算应选供应商 option
-        var idx = 0;
-
-        if (ex.__supplierManual) {
-          // 手动选的：优先保持 optIndex，其次按 supplier 名称找
-          if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
-          if (!tpl.options[idx]) idx = findOptionIndexBySupplier(tpl, ex.supplier || "");
-        } else {
-          // 自动跟随的：优先跟随主视觉供应商；若无，则尽量按原 supplier 保持
-          var defSup = getDefaultSupplierForMajor(tpl.major);
-          if (defSup) idx = findOptionIndexBySupplier(tpl, defSup);
-          else if (ex.supplier) idx = findOptionIndexBySupplier(tpl, ex.supplier);
-          else if (typeof ex.__optIndex === "number") idx = ex.__optIndex;
-        }
-
-        applyPick(tpl.key, tpl, idx, ex.qty, !!ex.__supplierManual);
-      });
-    }
-
-    async function refreshProducts() {
+    async function reloadAllProducts() {
       clearMsg();
+      productList.innerHTML = '<div class="hint">正在加载全部产品库（含所有大类）...</div>';
 
-      var majors = getSelectedMajors();
-      if (!majors || majors.length === 0) {
-        currentTemplates = [];
-        rebuildTemplatesMap();
-        productList.innerHTML = '<div class="hint">请先在步骤1选择至少一个产品大类</div>';
-        updateViewButtonsText();
-        return;
-      }
-
-      productList.innerHTML = '<div class="hint">加载中...</div>';
-
-      var selectedMetas = [];
-      for (var i = 0; i < majors.length; i++) {
-        var bucket = majorIndex.get(majors[i]);
-        if (bucket && bucket.metas) {
-          for (var j = 0; j < bucket.metas.length; j++) selectedMetas.push(bucket.metas[j]);
-        }
-      }
-
-      var allItems = [];
       var warnings = [];
+      var allItems = [];
 
-      for (var k = 0; k < selectedMetas.length; k++) {
-        try {
-          var items = await loadProductsFromTable({
-            id: selectedMetas[k].id,
-            name: selectedMetas[k].name,
-          });
-          allItems = allItems.concat(items);
-        } catch (e) {
+      // 并发加载，避免表多时太慢
+      var results = await runWithConcurrency(
+        metasParsed,
+        async function (meta) {
+          var items = await loadProductsFromTable({ id: meta.id, name: meta.name });
+          return { meta: meta, items: items };
+        },
+        4
+      );
+
+      for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        if (!r) continue;
+        if (r.__error) {
+          var metaName = metasParsed[i] && metasParsed[i].name ? metasParsed[i].name : "未知表";
           warnings.push(
             "表【" +
-              selectedMetas[k].name +
+              metaName +
               "】加载失败：" +
-              (e && e.message ? e.message : String(e))
+              (r.__error && r.__error.message ? r.__error.message : String(r.__error))
           );
+          continue;
         }
+        if (r.items && r.items.length) allItems = allItems.concat(r.items);
       }
 
-      var templates = buildProductTemplates(allItems);
+      allTemplates = buildProductTemplates(allItems);
+      rebuildAllTemplatesMap();
 
-      // 清理已选：不在本次模板中的产品从已选里移除
-      var alive = new Set();
-      for (var ti = 0; ti < templates.length; ti++) alive.add(templates[ti].key);
-      selected.forEach(function (v, key) {
-        if (!alive.has(key)) selected.delete(key);
-      });
-      persistSelectedDraft();
-
-      currentTemplates = templates;
-      rebuildTemplatesMap();
-
-      // 用模板“重算”占位选择，并套用自动跟随供应商逻辑
-      rehydrateSelectionsFromTemplates();
+      // 用全量模板重算已选项（不清理）
+      rehydrateSelectionsFromAllTemplates();
 
       // 主视觉供应商变化后，推送到未手动改过的已选（物料搭建/印刷制作）
       syncAutoSuppliersFromMainVisual();
 
-      renderProducts(currentTemplates);
+      // 更新 UI
+      renderProducts();
 
       if (warnings.length > 0) setMsg("部分表无法加载：\n" + warnings.join("\n"), "err");
+      else setMsg("产品库加载完成（全量）。", "ok");
     }
 
     // === 事件绑定 ===
 
-    majorSelectEl.addEventListener("change", function () {
-      refreshProducts().catch(function (e) {
-        setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
-      });
+    // 大类下拉开关 & 点击外部关闭
+    majorDropdownBtn.addEventListener("click", function (e) {
+      e.preventDefault();
+      toggleMajorDropdown();
+    });
+
+    document.addEventListener("click", function (e) {
+      var t = e && e.target ? e.target : null;
+      if (!t) return;
+
+      var insideBtn = majorDropdownBtn.contains(t);
+      var insidePanel = majorDropdownPanel.contains(t);
+      if (!insideBtn && !insidePanel) toggleMajorDropdown(false);
     });
 
     if (viewPoolBtn) {
@@ -1537,9 +1933,8 @@
         if (this.checked) {
           refillMainVisualSuppliers();
           renderMainVisualList();
-          // 打开主视觉配置时，同步一次默认供应商到未手动的已选项
           syncAutoSuppliersFromMainVisual();
-          renderProducts(currentTemplates);
+          renderProducts();
         }
       });
     }
@@ -1547,9 +1942,8 @@
     if (mvSupplier) {
       mvSupplier.addEventListener("change", function () {
         mainVisualDefaultSupplier = mvSupplier.value || "";
-        // 主视觉供应商变更 -> 推送到未手动改过的已选（物料搭建/印刷制作）
         syncAutoSuppliersFromMainVisual();
-        renderProducts(currentTemplates);
+        renderProducts();
       });
     }
 
@@ -1582,32 +1976,21 @@
 
     if (selectAllBtn) {
       selectAllBtn.addEventListener("click", function () {
-        for (var i = 0; i < majorSelectEl.options.length; i++) {
-          majorSelectEl.options[i].selected = true;
-        }
-        refreshProducts().catch(function (e) {
-          setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
-        });
+        setMajorSelectedAll(true);
       });
     }
 
     if (clearAllBtn) {
       clearAllBtn.addEventListener("click", function () {
-        for (var i = 0; i < majorSelectEl.options.length; i++) {
-          majorSelectEl.options[i].selected = false;
-        }
-
-        clearSelected();
-        currentTemplates = [];
-        rebuildTemplatesMap();
-        productList.innerHTML = '<div class="hint">请先在步骤1选择至少一个产品大类</div>';
-        updateViewButtonsText();
+        setMajorSelectedAll(false);
+        // 注意：需求3 已选不受大类影响，因此这里不再 clearSelected
+        renderProducts();
       });
     }
 
     if (reloadBtn) {
       reloadBtn.addEventListener("click", function () {
-        refreshProducts().catch(function (e) {
+        reloadAllProducts().catch(function (e) {
           setMsg("刷新产品失败：" + (e && e.message ? e.message : String(e)), "err");
         });
       });
@@ -1684,17 +2067,12 @@
     });
 
     // === 首次渲染 ===
-    renderMajorSelectOptions();
+    renderMajorDropdownOptions();
 
     // 还原“单次操作暂存”的已选
     var draftArr = restoreSelectedDraft();
 
-    // 如果暂存里有内容：尝试自动勾选相关大类（按 sourceTableName 反推可能的大类）
-    // 注意：暂存占位里没有 sourceTableName，这里只尽量根据 supplierManual 以外的信息无法推断；
-    // 因此仅当用户本次已选择大类时才能完整重建。这里做“无害尝试”：如果之前本次操作已经选过大类，用户通常会保留。
-    //（实际大类勾选仍以用户当前选择为准）
     if (draftArr && draftArr.length > 0) {
-      // 不强行选大类（避免误选）；但会提示用户可直接切到“已选产品”查看（当大类已选时）
       setProductViewMode("selected");
     } else {
       setProductViewMode("pool");
@@ -1703,8 +2081,10 @@
     // 主视觉默认供应商初始化（即使未勾选主视觉，也可用于默认跟随）
     refillMainVisualSuppliers();
 
-    updateViewButtonsText();
-    setMsg("初始化完成：请在步骤1选择产品大类。", "ok");
+    // 需求6/3：为了让搜索与已选始终可用，启动即加载“全量产品库”
+    reloadAllProducts().catch(function (e) {
+      setMsg("初始化加载产品失败：" + (e && e.message ? e.message : String(e)), "err");
+    });
   }
 
   if (document.readyState === "loading") {
