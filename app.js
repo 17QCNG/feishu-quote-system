@@ -495,7 +495,7 @@
       "产品描述",
     ];
 
-    var colWidths = [8, 24, 24, 9, 9, 9, 9, 9, 9, 35];
+    var colWidths = [8, 30, 24, 9, 9, 9, 9, 9, 9, 35];
     for (var c = 1; c <= colWidths.length; c++) {
       ws.getColumn(c).width = colWidths[c - 1];
     }
