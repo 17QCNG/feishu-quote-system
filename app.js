@@ -561,6 +561,15 @@
       return "其他";
     }
 
+    // 导出排序规则：主视觉喷绘（物料搭建）必须排在“物料搭建”大类最上方
+    function isMainVisualExportItem(it) {
+      if (!it) return false;
+      var name = normalizeName(it.name || "");
+      if (name !== "主视觉喷绘") return false;
+      var t = canonicalType(it.sourceTableName || "");
+      return t === "物料搭建";
+    }
+
     var selectedArr = [];
     if (selected && typeof selected.forEach === "function") {
       selected.forEach(function (v) {
@@ -571,6 +580,7 @@
     }
 
     // 需求2：同一大类内排序改为“先选择的在前”（__pickSeq 越小越靠前）
+    // 新需求：主视觉喷绘在“物料搭建”大类内永远置顶（且按添加顺序）
     selectedArr.sort(function (a, b) {
       var at = canonicalType(a && a.sourceTableName ? a.sourceTableName : "");
       var bt = canonicalType(b && b.sourceTableName ? b.sourceTableName : "");
@@ -582,6 +592,18 @@
         ? typeOrderMap[bt]
         : typeOrderMap["其他"];
       if (ai !== bi) return ai - bi;
+
+      // ✅ 同一大类内：主视觉喷绘（物料搭建）排在最前
+      var amv = isMainVisualExportItem(a);
+      var bmv = isMainVisualExportItem(b);
+      if (amv !== bmv) return amv ? -1 : 1;
+
+      // ✅ 主视觉喷绘之间：按添加顺序（__mvSeq 越小越靠前）
+      if (amv && bmv) {
+        var ams = a && typeof a.__mvSeq === "number" ? a.__mvSeq : 0;
+        var bms = b && typeof b.__mvSeq === "number" ? b.__mvSeq : 0;
+        if (ams !== bms) return ams - bms;
+      }
 
       var as = a && typeof a.__pickSeq === "number" ? a.__pickSeq : 0;
       var bs = b && typeof b.__pickSeq === "number" ? b.__pickSeq : 0;
@@ -994,7 +1016,9 @@
           if (String(x.key).indexOf("主视觉喷绘||") === 0) continue;
 
           var seq =
-            typeof x.__pickSeq === "number" && isFinite(x.__pickSeq) && x.__pickSeq > 0
+            typeof x.__pickSeq === "number" &&
+            isFinite(x.__pickSeq) &&
+            x.__pickSeq > 0
               ? x.__pickSeq
               : i + 1; // 兼容旧草稿（没有 seq 时按存储顺序补齐）
 
@@ -1510,7 +1534,10 @@
             var keepIdx = findOptionIndexBySupplierStrict(tpl, ex.supplier || "");
             if (keepIdx >= 0) idx = keepIdx;
             else idx = 0;
-          } else if (typeof ex.__optIndex === "number" && tpl.options[ex.__optIndex]) {
+          } else if (
+            typeof ex.__optIndex === "number" &&
+            tpl.options[ex.__optIndex]
+          ) {
             idx = ex.__optIndex;
           } else {
             idx = 0;
@@ -2048,7 +2075,13 @@
               }
             }
 
-            applyPick(tpl.key, tpl, idxToUse, qtyToUse, !!(d && d.supplierTouched));
+            applyPick(
+              tpl.key,
+              tpl,
+              idxToUse,
+              qtyToUse,
+              !!(d && d.supplierTouched)
+            );
 
             // 勾选后该产品从待选库隐藏；同时把它的“待选库预设”清掉（后续移除时也会重置）
             resetPoolDraftAndPersist(tpl.key);
@@ -2101,7 +2134,7 @@
       var mp = {
         id: m.id,
         name: name || m.id,
-        major: p.major || (name || m.id),
+        major: p.major || name || m.id,
         supplier: p.supplier || "",
       };
       metasParsed.push(mp);
@@ -2321,8 +2354,8 @@
                 sourceTableName: pb.sourceTableName || "物料搭建",
                 supplier: sup,
 
-                // 让主视觉喷绘在同一大类内排在最后（不影响你的产品选择顺序）
-                __pickSeq: Number.MAX_SAFE_INTEGER - i,
+                // ✅ 新需求：导出时主视觉喷绘要排在【物料搭建】大类最上方，这里记录添加顺序
+                __mvSeq: i,
               });
             }
 
