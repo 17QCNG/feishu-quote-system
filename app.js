@@ -482,8 +482,10 @@
       properties: { defaultRowHeight: 20 },
     });
 
+    // 新需求：产品名称前加“类目”
     var headers = [
       "科目",
+      "类目",
       "产品名称",
       "尺寸/天数",
       "数量",
@@ -495,7 +497,7 @@
       "产品描述",
     ];
 
-    var colWidths = [8, 30, 24, 9, 9, 9, 9, 9, 9, 35];
+    var colWidths = [8, 14, 30, 24, 9, 9, 9, 9, 9, 9, 35];
     for (var c = 1; c <= colWidths.length; c++) {
       ws.getColumn(c).width = colWidths[c - 1];
     }
@@ -527,7 +529,8 @@
     };
     headerRow.height = 20;
 
-    for (var hc = 8; hc <= 9; hc++) {
+    // 仍高亮“单价/总价”
+    for (var hc = 9; hc <= 10; hc++) {
       ws.getCell(2, hc).fill = {
         type: "pattern",
         pattern: "solid",
@@ -535,6 +538,7 @@
       };
     }
 
+    // 新需求：屏幕舞台/灯光/音响归为“多媒体搭建”
     var typeOrder = [
       "物料搭建",
       "印刷制作",
@@ -543,9 +547,7 @@
       "系统适配",
       "人员执行",
       "硬件设备",
-      "屏幕舞台",
-      "灯光",
-      "音响",
+      "多媒体搭建",
       "摄影摄像",
       "视觉设计",
       "项目管理",
@@ -559,6 +561,10 @@
       var t0 = normalizeName(rawType);
       var p = parseTableName(t0);
       var t = normalizeName(p.major || t0);
+
+      // ✅ 需求2：归并
+      if (t === "屏幕舞台" || t === "灯光" || t === "音响")
+        return "多媒体搭建";
 
       if (Object.prototype.hasOwnProperty.call(typeOrderMap, t)) return t;
       return "其他";
@@ -665,29 +671,47 @@
       rowNum++;
     }
 
+    // ✅ 需求1：同一类产品合并“类目”(B列)并填入产品类型
+    function mergeCategoryCells(startRn, endRn, typeLabel) {
+      if (!startRn || !endRn) return;
+      if (startRn > endRn) return;
+
+      ws.mergeCells(startRn, 2, endRn, 2);
+
+      var cell = ws.getCell(startRn, 2);
+      cell.value = typeLabel || "";
+      cell.alignment = {
+        vertical: "middle",
+        horizontal: "center",
+        wrapText: true,
+      };
+    }
+
     function addGroupSubtotal(startRn, endRn) {
       var subtotalRowNum = rowNum;
 
       ws.getRow(subtotalRowNum).height = 20;
 
-      ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 6);
+      // 新增“类目”列后，"小计" 合并到 成本单价(第7列) 为止
+      ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 7);
       ws.getCell(subtotalRowNum, 1).value = "小计";
 
-      ws.getCell(subtotalRowNum, 7).value = {
-        formula: "SUM(G" + startRn + ":G" + endRn + ")",
+      // 成本总价 = 第8列(H)，总价 = 第10列(J)
+      ws.getCell(subtotalRowNum, 8).value = {
+        formula: "SUM(H" + startRn + ":H" + endRn + ")",
       };
-      ws.getCell(subtotalRowNum, 9).value = {
-        formula: "SUM(I" + startRn + ":I" + endRn + ")",
+      ws.getCell(subtotalRowNum, 10).value = {
+        formula: "SUM(J" + startRn + ":J" + endRn + ")",
       };
 
       styleRowAllCols(subtotalRowNum, null, true);
 
-      ws.getCell(subtotalRowNum, 7).fill = {
+      ws.getCell(subtotalRowNum, 8).fill = {
         type: "pattern",
         pattern: "solid",
         fgColor: { argb: "FFFFFF00" },
       };
-      ws.getCell(subtotalRowNum, 9).fill = {
+      ws.getCell(subtotalRowNum, 10).fill = {
         type: "pattern",
         pattern: "solid",
         fgColor: { argb: "FFFFFF00" },
@@ -700,25 +724,25 @@
     function addGrandTotalWithTax() {
       ws.getRow(rowNum).height = 20;
 
-      ws.mergeCells(rowNum, 1, rowNum, 6);
+      ws.mergeCells(rowNum, 1, rowNum, 7);
       ws.getCell(rowNum, 1).value = "含税合计（税价6%）";
 
       if (subtotalRows.length === 0) {
-        ws.getCell(rowNum, 7).value = 0;
-        ws.getCell(rowNum, 9).value = 0;
+        ws.getCell(rowNum, 8).value = 0;
+        ws.getCell(rowNum, 10).value = 0;
       } else {
-        var gRefs = [];
-        var iRefs = [];
+        var hRefs = [];
+        var jRefs = [];
         for (var i = 0; i < subtotalRows.length; i++) {
-          gRefs.push("G" + subtotalRows[i]);
-          iRefs.push("I" + subtotalRows[i]);
+          hRefs.push("H" + subtotalRows[i]);
+          jRefs.push("J" + subtotalRows[i]);
         }
 
-        ws.getCell(rowNum, 7).value = {
-          formula: "SUM(" + gRefs.join(",") + ")",
+        ws.getCell(rowNum, 8).value = {
+          formula: "SUM(" + hRefs.join(",") + ")",
         };
-        ws.getCell(rowNum, 9).value = {
-          formula: "SUM(" + iRefs.join(",") + ")*1.06",
+        ws.getCell(rowNum, 10).value = {
+          formula: "SUM(" + jRefs.join(",") + ")*1.06",
         };
       }
 
@@ -732,6 +756,8 @@
 
       if (typeLabel !== groupType) {
         if (groupType != null) {
+          // 先合并上一组的“类目”
+          mergeCategoryCells(groupStartRow, groupEndRow, groupType);
           addGroupSubtotal(groupStartRow, groupEndRow);
         }
 
@@ -753,16 +779,19 @@
       var rn = rowNum;
       var row = ws.getRow(rn);
 
+      // 列结构：
+      // A 科目(序号) | B 类目(合并写) | C 产品名称 | D 尺寸/天数 | E 数量 | F 单位 | G 成本单价 | H 成本总价 | I 单价 | J 总价 | K 产品描述
       row.getCell(1).value = groupSerial;
-      row.getCell(2).value = it.name || "";
-      row.getCell(3).value = it.sizeDays || "";
-      row.getCell(4).value = Math.max(1, Number(it.qty) || 1);
-      row.getCell(5).value = it.unit || "";
-      row.getCell(6).value = Number(it.cost || 0);
-      row.getCell(7).value = { formula: "F" + rn + "*D" + rn };
-      row.getCell(8).value = Number(it.price || 0);
-      row.getCell(9).value = { formula: "H" + rn + "*D" + rn };
-      row.getCell(10).value = desc;
+      row.getCell(2).value = ""; // 由 mergeCategoryCells 在组内合并后写入
+      row.getCell(3).value = it.name || "";
+      row.getCell(4).value = it.sizeDays || "";
+      row.getCell(5).value = Math.max(1, Number(it.qty) || 1);
+      row.getCell(6).value = it.unit || "";
+      row.getCell(7).value = Number(it.cost || 0);
+      row.getCell(8).value = { formula: "G" + rn + "*E" + rn };
+      row.getCell(9).value = Number(it.price || 0);
+      row.getCell(10).value = { formula: "I" + rn + "*E" + rn };
+      row.getCell(11).value = desc;
 
       var maxLines = 1;
       for (var ci = 1; ci <= headers.length; ci++) {
@@ -788,6 +817,7 @@
     }
 
     if (groupType != null && groupStartRow <= groupEndRow) {
+      mergeCategoryCells(groupStartRow, groupEndRow, groupType);
       addGroupSubtotal(groupStartRow, groupEndRow);
     }
 
@@ -1249,33 +1279,6 @@
         (arr.length > 4 ? "..." : "");
     }
 
-    var typeOrder = [
-      "物料搭建",
-      "印刷制作",
-      "线上小程序",
-      "系统设计",
-      "系统适配",
-      "人员执行",
-      "硬件设备",
-      "摄影摄像",
-      "视觉设计",
-      "项目管理",
-      "其他",
-    ];
-    var typeOrderMap = {};
-    for (var oi = 0; oi < typeOrder.length; oi++)
-      typeOrderMap[typeOrder[oi]] = oi;
-
-    function majorSort(a, b) {
-      var ai = typeOrderMap[a];
-      var bi = typeOrderMap[b];
-      if (ai == null && bi == null)
-        return String(a).localeCompare(String(b), "zh");
-      if (ai == null) return 1;
-      if (bi == null) return -1;
-      return ai - bi;
-    }
-
     function renderMajorDropdownOptions() {
       majorDropdownPanel.innerHTML = "";
 
@@ -1291,7 +1294,10 @@
         majors.push(v.major);
       });
 
-      majors.sort(majorSort);
+      // 这里仍用 UI 的排序规则，不影响导出科目归并逻辑
+      majors.sort(function (a, b) {
+        return String(a).localeCompare(String(b), "zh");
+      });
 
       for (var i = 0; i < majors.length; i++) {
         var major = majors[i];
@@ -1704,7 +1710,8 @@
           "其他";
 
         var name = (tpl && tpl.name) || (picked && picked.name) || "";
-        var sizeDays = (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
+        var sizeDays =
+          (tpl && tpl.sizeDays) || (picked && picked.sizeDays) || "";
         var unit = (tpl && tpl.unit) || (picked && picked.unit) || "";
 
         if (tokens.length > 0) {
@@ -1760,7 +1767,9 @@
       groups.forEach(function (_, k) {
         majors.push(k);
       });
-      majors.sort(majorSort);
+      majors.sort(function (a, b) {
+        return String(a).localeCompare(String(b), "zh");
+      });
 
       for (var gi = 0; gi < majors.length; gi++) {
         (function () {
@@ -2119,6 +2128,7 @@
     }
 
     // === 初始化读取表列表 ===
+    var metas = [];
     try {
       metas = await getAllTables(bitable);
     } catch (e2) {
