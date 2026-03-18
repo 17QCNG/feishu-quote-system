@@ -1,124 +1,501 @@
-diff --git a/index.html b/index.html
---- a/index.html
-+++ b/index.html
-@@ -120,7 +120,7 @@
-           <strong>全部产品</strong> 中搜索（不受大类限制）。<br />
--          输出列固定为：科目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
-+          输出列固定为：科目、类目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
-           同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
-         </div>
-       </div>
-diff --git a/app.js b/app.js
---- a/app.js
-+++ b/app.js
-@@ -1,4 +1,4 @@
--// app.js
-+// app.js
- (function () {
-   function setMsg(text, type) {
-     var el = document.getElementById("message");
-@@ -320,16 +320,18 @@
-     var ws = wb.addWorksheet("报价单", {
-       properties: { defaultRowHeight: 20 },
-     });
- 
-     var headers = [
-       "科目",
-+      "类目",
-       "产品名称",
-       "尺寸/天数",
-       "数量",
-       "单位",
-       "成本单价",
-       "成本总价",
-       "单价",
-       "总价",
-       "产品描述",
-     ];
- 
--    var colWidths = [8, 30, 24, 9, 9, 9, 9, 9, 9, 35];
-+    var colWidths = [8, 14, 30, 24, 9, 9, 9, 9, 9, 9, 35];
-     for (var c = 1; c <= colWidths.length; c++) {
-       ws.getColumn(c).width = colWidths[c - 1];
-     }
-@@ -369,7 +371,7 @@
-     headerRow.height = 20;
- 
--    for (var hc = 8; hc <= 9; hc++) {
-+    for (var hc = 9; hc <= 10; hc++) {
-       ws.getCell(2, hc).fill = {
-         type: "pattern",
-         pattern: "solid",
-         fgColor: { argb: "FFFFFF00" },
-       };
-     }
- 
-     var typeOrder = [
-       "物料搭建",
-       "印刷制作",
-       "线上小程序",
-       "系统设计",
-       "系统适配",
-       "人员执行",
-       "硬件设备",
--      "屏幕舞台",
--      "灯光",
--      "音响",
-+      "多媒体搭建",
-       "摄影摄像",
-       "视觉设计",
-       "项目管理",
-       "其他",
-     ];
-@@ -385,6 +387,10 @@
-     function canonicalType(rawType) {
-       var t0 = normalizeName(rawType);
-       var p = parseTableName(t0);
-       var t = normalizeName(p.major || t0);
- 
-+      // 需求2：屏幕舞台/灯光/音响 归并为“多媒体搭建”（影响“科目”分组与标题）
-+      if (t === "屏幕舞台" || t === "灯光" || t === "音响") return "多媒体搭建";
-+
-       if (Object.prototype.hasOwnProperty.call(typeOrderMap, t)) return t;
-       return "其他";
-     }
-@@ -515,6 +521,23 @@
-       rowNum++;
-     }
- 
-+    // 需求1：增加“类目”列（B列），同一产品分类合并单元格并填入分类名称
-+    function mergeCategoryCells(startRn, endRn, typeLabel) {
-+      if (!startRn || !endRn) return;
-+      if (startRn > endRn) return;
-+
-+      // 合并 B 列同一组的类目单元格
-+      ws.mergeCells(startRn, 2, endRn, 2);
-+
-+      var cell = ws.getCell(startRn, 2);
-+      cell.value = typeLabel || "";
-+      cell.alignment = {
-+        vertical: "middle",
-+        horizontal: "center",
-+        wrapText: true,
-+      };
-+    }
-+
-     function addGroupSubtotal(startRn, endRn) {
-       var subtotalRowNum = rowNum;
- 
-       ws.getRow(subtotalRowNum).height = 20;
- 
--      ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 6);
-+      ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 7);
-       ws.getCell(subtotalRowNum, 1).value = "小计";
- 
--      ws.getCell(subtotalRowNum, 7).value = {
--        formula: "SUM(G" + startRn + ":G" + endRn + ")",
-+      ws.getCell(subtotalRowNum, 8).value = {
-+        formula: "SUM(H" + startRn + ":H" + endRn + ")",
-       };
--      ws.getCell(subtotalRowNum, 9).value = {
--        formula: "SUM(I" + startRn + ":I" + endRn + ")",
-+      ws.getCell(subtotalRowNum, 10).value = {
-+        formula: "SUM(J" + startRn + ":J" + endRn + ")",
-       };
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>报价系统</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #1f2329;
+        --muted: #646a73;
+        --line: #dee0e3;
+        --primary: #3370ff;
+        --primary2: #2b5dd4;
+        --ok: #00b42a;
+        --err: #f53f3f;
+      }
+
+      body {
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      .container {
+        max-width: 760px;
+        margin: 0 auto;
+        background: var(--card);
+        border: 1px solid rgba(0, 0, 0, 0.06);
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 6px 20px rgba(31, 35, 41, 0.06);
+      }
+
+      h2 {
+        margin: 0 0 12px 0;
+        font-size: 20px;
+      }
+
+      h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+      }
+
+      .section {
+        margin-top: 14px;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 8px;
+        line-height: 1.5;
+      }
+
+      .rowline {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .smallbtn {
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--text);
+      }
+
+      .smallbtn:hover {
+        background: #f7f8fa;
+      }
+
+      .tabbtn.active {
+        border-color: rgba(51, 112, 255, 0.5);
+        background: rgba(51, 112, 255, 0.08);
+        color: var(--primary2);
+        font-weight: 700;
+      }
+
+      .table-item {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 6px 4px;
+        border-bottom: 1px solid rgba(222, 224, 227, 0.6);
+      }
+
+      .table-item:last-child {
+        border-bottom: none;
+      }
+
+      .table-name {
+        font-size: 13px;
+      }
+
+      .products {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        max-height: 420px;
+        overflow: auto;
+        background: #fff;
+      }
+
+      .prow {
+        display: grid;
+        grid-template-columns: 20px 1fr 150px 120px;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(222, 224, 227, 0.6);
+      }
+
+      .prow:last-child {
+        border-bottom: none;
+      }
+
+      .pname {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .pmeta {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+        line-height: 1.5;
+      }
+
+      .qty {
+        width: 88px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        box-sizing: border-box;
+      }
+
+      .select {
+        width: 150px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        font-size: 12px;
+        box-sizing: border-box;
+      }
+
+      .input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        box-sizing: border-box;
+        font-size: 13px;
+        background: #fff;
+      }
+
+      .hl {
+        background: rgba(255, 235, 59, 0.35);
+        padding: 1px 6px;
+        border-radius: 8px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .btn {
+        margin-top: 14px;
+        width: 100%;
+        padding: 12px;
+        border: none;
+        border-radius: 10px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 15px;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background: var(--primary2);
+      }
+
+      .msg {
+        display: none;
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+
+      .msg.ok {
+        display: block;
+        background: rgba(0, 180, 42, 0.08);
+        color: var(--ok);
+        border: 1px solid rgba(0, 180, 42, 0.25);
+      }
+
+      .msg.err {
+        display: block;
+        background: rgba(245, 63, 63, 0.08);
+        color: var(--err);
+        border: 1px solid rgba(245, 63, 63, 0.25);
+      }
+
+      /* 数量 + 单位 */
+      .qtywrap {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 120px;
+      }
+
+      .unit {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      /* ====== 新：产品大类下拉多选（节省空间） ====== */
+      .major-dropdown {
+        position: relative;
+        width: 100%;
+        margin-top: 8px;
+      }
+
+      .major-btn {
+        width: 100%;
+        text-align: left;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .major-btn .major-btn-text {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .major-btn .major-btn-arrow {
+        font-size: 12px;
+        color: var(--muted);
+        flex: 0 0 auto;
+      }
+
+      .major-panel {
+        position: absolute;
+        z-index: 50;
+        left: 0;
+        right: 0;
+        top: calc(100% + 6px);
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(31, 35, 41, 0.12);
+        padding: 8px;
+        max-height: 320px;
+        overflow: auto;
+        display: none;
+      }
+
+      .major-item {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        padding: 10px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+
+      .major-item:hover {
+        background: #f7f8fa;
+      }
+
+      .major-item input[type="checkbox"] {
+        margin-top: 2px;
+      }
+
+      .major-item .major-label {
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .major-item .major-sup {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      /* ====== 新：已选产品按大类分组+颜色区分 ====== */
+      .group-block {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 10px;
+      }
+
+      .group-header {
+        padding: 10px 12px;
+        background: color-mix(in srgb, var(--gcolor) 14%, #ffffff);
+        border-left: 8px solid var(--gcolor);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .group-title {
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .group-sub {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .group-body .prow {
+        border-left: 8px solid color-mix(in srgb, var(--gcolor) 40%, #ffffff);
+      }
+
+      @media (max-width: 520px) {
+        .prow {
+          grid-template-columns: 20px 1fr;
+        }
+        .prow .select,
+        .prow .qtywrap {
+          grid-column: 2 / 3;
+          width: 100%;
+        }
+        .prow .qtywrap .qty {
+          flex: 1 1 auto;
+          width: auto;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <h2>📋 报价系统</h2>
+
+      <div class="section">
+        <h3>报价单设置</h3>
+        <input
+          id="quoteFileName"
+          class="input"
+          type="text"
+          placeholder="例如：XX项目报价单（导出为 .xlsx）"
+        />
+        <div class="hint">
+          该名称会写入表头上方标题行，并作为导出文件名（自动追加 .xlsx）。
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>主视觉喷绘</h3>
+
+        <div class="rowline" style="gap: 6px">
+          <input id="needMainVisual" type="checkbox" />
+          <div class="table-name">需要主视觉喷绘（可添加多次）</div>
+        </div>
+
+        <div id="mainVisualConfig" style="display: none; margin-top: 10px">
+          <div class="rowline">
+            <select id="mainVisualSupplier" class="select"></select>
+
+            <input
+              id="mainVisualSize"
+              class="input"
+              type="text"
+              placeholder="主视觉喷绘尺寸，例如：3m*5m"
+            />
+
+            <div class="qtywrap">
+              <input
+                id="mainVisualQty"
+                class="qty"
+                type="number"
+                min="1"
+                step="1"
+                value="1"
+              />
+              <span id="mainVisualQtyUnit" class="unit">平方</span>
+            </div>
+
+            <button id="addMainVisual" class="smallbtn" type="button">
+              确认添加
+            </button>
+          </div>
+
+          <div id="mainVisualList" class="hint" style="margin-top: 8px"></div>
+
+          <div class="hint">
+            每次添加会在报价表中作为一条独立“主视觉喷绘”产品输出；成本/单价匹配【物料搭建】中的“主视觉喷绘”（按供应商匹配）。<br />
+            【物料搭建】【印刷制作】产品的默认供应商会跟随此处选择（仍可对单项手动修改）。
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>步骤1：选择产品大类（下拉多选）</h3>
+
+        <div class="rowline">
+          <button id="selectAllTables" class="smallbtn" type="button">
+            全选
+          </button>
+          <button id="clearAllTables" class="smallbtn" type="button">
+            全不选
+          </button>
+          <button id="reloadProducts" class="smallbtn" type="button">
+            重新加载产品
+          </button>
+        </div>
+
+        <div id="majorDropdown" class="major-dropdown">
+          <button id="majorDropdownBtn" class="input major-btn" type="button">
+            <span class="major-btn-text">请选择产品大类</span>
+            <span class="major-btn-arrow">▼</span>
+          </button>
+          <div id="majorDropdownPanel" class="major-panel"></div>
+        </div>
+
+        <div class="hint">
+          未搜索时，“待选库”会按你勾选的大类显示；当你在搜索框输入关键字时，会从
+          <strong>全部产品</strong> 中搜索（不受大类限制）。<br />
+          输出列固定为：科目、类目、产品名称、尺寸/天数、数量、单位、成本单价、成本总价(公式)、单价、总价(公式)、产品描述。<br />
+          同一产品大类会自动插入：分组标题行、分组小计行，以及底部含税合计（税价6%）。
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>步骤2：选择产品（待选库 / 已选产品）</h3>
+
+        <div class="rowline">
+          <button id="viewPool" class="smallbtn tabbtn active" type="button">
+            待选库
+          </button>
+          <button id="viewSelected" class="smallbtn tabbtn" type="button">
+            已选产品
+          </button>
+
+          <span style="flex: 1 1 auto"></span>
+
+          <button id="selectAllVisibleProducts" class="smallbtn" type="button">
+            全选当前列表
+          </button>
+          <button id="clearAllSelectedProducts" class="smallbtn" type="button">
+            清空已选
+          </button>
+        </div>
+
+        <div style="margin-top: 8px">
+          <input
+            id="productSearch"
+            class="input"
+            type="text"
+            placeholder="搜索产品：输入关键字（匹配名称/描述/尺寸/供应商），自动推荐排序"
+          />
+          <div class="hint">
+            已选产品会在“待选库”中自动隐藏；在“已选产品”取消勾选后会回到待选库。<br />
+            本次操作已选产品会临时暂存（刷新页面不丢失，关闭页签后清空）。
+          </div>
+        </div>
+
+        <div id="productList" class="products" style="margin-top: 8px">
+          <div class="hint">正在初始化...</div>
+        </div>
+      </div>
+
+      <button id="exportXlsx" class="btn" type="button">
+        📤 导出报价单 XLSX（带公式）
+      </button>
+
+      <div id="message" class="msg"></div>
+    </div>
+
+    <!-- ExcelJS：生成 .xlsx（支持合并单元格/样式/列宽/行高/自动换行） -->
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+
+    <!-- 注入 Base JS SDK 到 window.bitable -->
+    <script type="module">
+      import { bitable } from "https://cdn.jsdelivr.net/npm/@lark-base-open/js-sdk@1.0.2/dist/index.mjs";
+      window.bitable = bitable;
+    </script>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
