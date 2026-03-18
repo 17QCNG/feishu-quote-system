@@ -482,7 +482,6 @@ async function exportXlsx(selected, quoteName) {
     properties: { defaultRowHeight: 20 },
   });
 
-  // 新需求：产品名称前加“类目”
   var headers = [
     "科目",
     "类目",
@@ -529,7 +528,6 @@ async function exportXlsx(selected, quoteName) {
   };
   headerRow.height = 20;
 
-  // 仍高亮“单价/总价”
   for (var hc = 9; hc <= 10; hc++) {
     ws.getCell(2, hc).fill = {
       type: "pattern",
@@ -538,7 +536,6 @@ async function exportXlsx(selected, quoteName) {
     };
   }
 
-  // 新需求：屏幕舞台/灯光/音响归为“多媒体搭建”
   var typeOrder = [
     "物料搭建",
     "印刷制作",
@@ -561,22 +558,39 @@ async function exportXlsx(selected, quoteName) {
     var p = parseTableName(t0);
     var t = normalizeName(p.major || t0);
 
-    // ✅ 需求2：归并
+    // 归并：屏幕舞台/灯光/音响 -> 多媒体搭建
     if (t === "屏幕舞台" || t === "灯光" || t === "音响") return "多媒体搭建";
 
     if (Object.prototype.hasOwnProperty.call(typeOrderMap, t)) return t;
     return "其他";
   }
 
-  // “类目列(B)”显示/合并所用：读取数据表的大类（不走归并）
-  function rawMajorLabel(it) {
+  // 读取数据表的大类（不走归并）
+  function rawMajor(it) {
     var t0 = normalizeName(it && it.sourceTableName ? it.sourceTableName : "");
     if (!t0) return "其他";
     var p = parseTableName(t0);
     return normalizeName(p.major || t0) || "其他";
   }
 
-  // 导出排序规则：主视觉喷绘（物料搭建）必须排在“物料搭建”大类最上方
+  // B列类目显示名（与你截图一致）
+  function displayMajorForCategory(major) {
+    var m = normalizeName(major);
+    if (m === "屏幕舞台") return "舞台大屏";
+    return m || "其他";
+  }
+
+  // 多媒体搭建组内固定顺序：音响 -> 舞台大屏 -> 灯光
+  var mmCatOrder = ["音响", "舞台大屏", "灯光"];
+  var mmCatRankMap = {};
+  for (var i0 = 0; i0 < mmCatOrder.length; i0++) mmCatRankMap[mmCatOrder[i0]] = i0;
+
+  function multimediaCatRank(it) {
+    var m = displayMajorForCategory(rawMajor(it));
+    if (Object.prototype.hasOwnProperty.call(mmCatRankMap, m)) return mmCatRankMap[m];
+    return 99;
+  }
+
   function isMainVisualExportItem(it) {
     if (!it) return false;
     var name = normalizeName(it.name || "");
@@ -594,8 +608,6 @@ async function exportXlsx(selected, quoteName) {
     selectedArr = selected.slice();
   }
 
-  // 需求2：同一大类内排序改为“先选择的在前”（__pickSeq 越小越靠前）
-  // 新需求：主视觉喷绘在“物料搭建”大类内永远置顶（且按添加顺序）
   selectedArr.sort(function (a, b) {
     var at = canonicalType(a && a.sourceTableName ? a.sourceTableName : "");
     var bt = canonicalType(b && b.sourceTableName ? b.sourceTableName : "");
@@ -608,25 +620,31 @@ async function exportXlsx(selected, quoteName) {
       : typeOrderMap["其他"];
     if (ai !== bi) return ai - bi;
 
-    // ✅ 同一大类内：主视觉喷绘（物料搭建）排在最前
+    // 同一科目内：主视觉喷绘（物料搭建）置顶
     var amv = isMainVisualExportItem(a);
     var bmv = isMainVisualExportItem(b);
     if (amv !== bmv) return amv ? -1 : 1;
-
-    // ✅ 主视觉喷绘之间：按添加顺序（__mvSeq 越小越靠前）
     if (amv && bmv) {
       var ams = a && typeof a.__mvSeq === "number" ? a.__mvSeq : 0;
       var bms = b && typeof b.__mvSeq === "number" ? b.__mvSeq : 0;
       if (ams !== bms) return ams - bms;
     }
 
+    // ✅ 多媒体搭建：按“类目固定顺序”排，保证音响/舞台大屏/灯光分段连续
+    if (at === "多媒体搭建") {
+      var ar = multimediaCatRank(a);
+      var br = multimediaCatRank(b);
+      if (ar !== br) return ar - br;
+    }
+
+    // 其他科目：同一科目内按先选先排
     var as = a && typeof a.__pickSeq === "number" ? a.__pickSeq : 0;
     var bs = b && typeof b.__pickSeq === "number" ? b.__pickSeq : 0;
     if (as && bs && as !== bs) return as - bs;
     if (as && !bs) return -1;
     if (!as && bs) return 1;
 
-    // 兜底：保持原来的稳定排序（名称/编号）
+    // 兜底
     var an = normalizeName(a && a.name ? a.name : "");
     var bn = normalizeName(b && b.name ? b.name : "");
     if (an !== bn) return an.localeCompare(bn, "zh");
@@ -645,7 +663,7 @@ async function exportXlsx(selected, quoteName) {
   var groupEndRow = 0;
   var subtotalRows = [];
 
-  // 类目（B列）按“读取数据表大类”在组内分段合并
+  // 组内“类目(B列)”分段合并游标
   var catLabel = null;
   var catStartRow = 0;
   var catEndRow = 0;
@@ -682,14 +700,8 @@ async function exportXlsx(selected, quoteName) {
     rowNum++;
   }
 
-  // 合并 B 列某一段，并填上段标题（读取数据表的大类名称）
-  function mergeCategoryCells(startRn, endRn, label) {
-    if (!startRn || !endRn) return;
-    if (startRn > endRn) return;
-
-    ws.mergeCells(startRn, 2, endRn, 2);
-
-    var cell = ws.getCell(startRn, 2);
+  function setCategoryCellValue(rn, label) {
+    var cell = ws.getCell(rn, 2);
     cell.value = label || "";
     cell.alignment = {
       vertical: "middle",
@@ -698,16 +710,26 @@ async function exportXlsx(selected, quoteName) {
     };
   }
 
+  // 合并 B 列一段，并填上该段类目名
+  function mergeCategoryCells(startRn, endRn, label) {
+    if (!startRn || !endRn) return;
+    if (startRn > endRn) return;
+
+    if (startRn !== endRn) {
+      ws.mergeCells(startRn, 2, endRn, 2);
+    }
+    setCategoryCellValue(startRn, label);
+  }
+
   function addGroupSubtotal(startRn, endRn) {
     var subtotalRowNum = rowNum;
 
     ws.getRow(subtotalRowNum).height = 20;
 
-    // 新增“类目”列后，"小计" 合并到 成本单价(第7列) 为止
+    // "小计" 合并到 成本单价(第7列)
     ws.mergeCells(subtotalRowNum, 1, subtotalRowNum, 7);
     ws.getCell(subtotalRowNum, 1).value = "小计";
 
-    // 成本总价 = 第8列(H)，总价 = 第10列(J)
     ws.getCell(subtotalRowNum, 8).value = {
       formula: "SUM(H" + startRn + ":H" + endRn + ")",
     };
@@ -767,7 +789,7 @@ async function exportXlsx(selected, quoteName) {
 
     if (typeLabel !== groupType) {
       if (groupType != null) {
-        // 结束上一科目组：先合并该组内最后一段“类目”，再写小计
+        // 结束上一科目组：先合并组内最后一段“类目”，再写小计
         mergeCategoryCells(catStartRow, catEndRow, catLabel);
         addGroupSubtotal(groupStartRow, groupEndRow);
       }
@@ -781,7 +803,7 @@ async function exportXlsx(selected, quoteName) {
       groupStartRow = rowNum;
       groupEndRow = rowNum - 1;
 
-      // 新科目组开始：重置类目分段游标
+      // 新组开始，重置类目分段
       catLabel = null;
       catStartRow = 0;
       catEndRow = 0;
@@ -789,16 +811,16 @@ async function exportXlsx(selected, quoteName) {
 
     groupSerial++;
 
-    // 额外需求：导出“产品描述”不追加供应商（保持纯描述）
     var desc = normalizeNewlines(it.desc || "");
 
     var rn = rowNum;
     var row = ws.getRow(rn);
 
-    // 列结构：
-    // A 科目(序号) | B 类目(按读取数据表大类分段合并写) | C 产品名称 | D 尺寸/天数 | E 数量 | F 单位 | G 成本单价 | H 成本总价 | I 单价 | J 总价 | K 产品描述
     row.getCell(1).value = groupSerial;
-    row.getCell(2).value = ""; // 由 mergeCategoryCells 分段合并后写入
+
+    // B列先置空，后面靠“分段合并”统一写
+    row.getCell(2).value = "";
+
     row.getCell(3).value = it.name || "";
     row.getCell(4).value = it.sizeDays || "";
     row.getCell(5).value = Math.max(1, Number(it.qty) || 1);
@@ -809,8 +831,8 @@ async function exportXlsx(selected, quoteName) {
     row.getCell(10).value = { formula: "I" + rn + "*E" + rn };
     row.getCell(11).value = desc;
 
-    // ===== 关键：B列类目按“读取数据表大类”分段合并 =====
-    var curCat = rawMajorLabel(it);
+    // ===== B列类目：按“读取数据表大类”分段合并 =====
+    var curCat = displayMajorForCategory(rawMajor(it));
     if (catLabel == null) {
       catLabel = curCat;
       catStartRow = rn;
@@ -823,7 +845,7 @@ async function exportXlsx(selected, quoteName) {
       catStartRow = rn;
       catEndRow = rn;
     }
-    // ===============================================
+    // ==============================================
 
     var maxLines = 1;
     for (var ci = 1; ci <= headers.length; ci++) {
